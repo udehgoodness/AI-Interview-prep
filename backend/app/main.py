@@ -1,10 +1,11 @@
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Body
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import os
 import json
+import base64
 from dotenv import load_dotenv
 from ai_service import AIService
 from utils import extract_text_from_cv
@@ -51,6 +52,24 @@ class InterviewEvaluation(BaseModel):
     questions: List[Dict[str, Any]]
     answers: List[Dict[str, Any]]
     job_title: str
+
+class SpeechToTextRequest(BaseModel):
+    audio: str  # Base64 encoded audio data
+    language: str = "en"
+
+class TextToSpeechRequest(BaseModel):
+    text: str
+    voice: str = "alloy"
+
+class ConversationMessage(BaseModel):
+    role: str
+    content: str
+
+class ConversationRequest(BaseModel):
+    job_title: str
+    job_description: str
+    conversation_history: List[ConversationMessage]
+    current_question_index: int = 0
 
 # Routes
 @app.get("/")
@@ -127,6 +146,91 @@ async def evaluate_interview(request: FeedbackRequest):
         
         return result
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/speech-to-text")
+async def speech_to_text(request: SpeechToTextRequest):
+    """
+    Convert speech to text using OpenAI's Whisper API
+    """
+    try:
+        # Decode the base64 audio data
+        audio_data = base64.b64decode(request.audio)
+        
+        # Convert speech to text
+        text = AIService.speech_to_text(audio_data, request.language)
+        
+        return {"text": text}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/text-to-speech")
+async def text_to_speech(request: TextToSpeechRequest):
+    """
+    Convert text to speech using OpenAI's TTS API
+    """
+    try:
+        # Convert text to speech
+        audio_data = AIService.text_to_speech(request.text, request.voice)
+        
+        # Return the audio data as a binary response
+        return Response(
+            content=audio_data,
+            media_type="audio/mpeg"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/interview/conversation")
+async def process_conversation(request: ConversationRequest):
+    """
+    Process a conversational interview exchange
+    """
+    try:
+        # Process the conversation
+        result = AIService.process_interview_conversation(
+            job_title=request.job_title,
+            job_description=request.job_description,
+            conversation_history=[msg.dict() for msg in request.conversation_history],
+            current_question_index=request.current_question_index
+        )
+        
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/upload-audio", response_model=dict)
+async def upload_audio(file: UploadFile = File(...)):
+    """
+    Upload and transcribe audio file
+    """
+    try:
+        # Create temp directory if it doesn't exist
+        os.makedirs("temp", exist_ok=True)
+        
+        # Save the file temporarily
+        file_location = f"temp/{file.filename}"
+        with open(file_location, "wb+") as file_object:
+            file_object.write(await file.read())
+        
+        # Read the audio file
+        with open(file_location, "rb") as audio_file:
+            audio_data = audio_file.read()
+        
+        # Transcribe the audio
+        text = AIService.speech_to_text(audio_data)
+        
+        # Clean up the temporary file
+        os.remove(file_location)
+        
+        return {
+            "filename": file.filename,
+            "text": text
+        }
+    except Exception as e:
+        # Clean up the temporary file in case of error
+        if 'file_location' in locals() and os.path.exists(file_location):
+            os.remove(file_location)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/health")

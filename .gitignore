@@ -47,3 +47,8 @@ frontend/out/
 *.swp
 *.swo
 .DS_Store
+
+# Temporary files
+temp/
+*.mp3
+*.webm

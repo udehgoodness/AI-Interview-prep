@@ -100,7 +100,17 @@ export default function InterviewSetup() {
   return (
     <div className="container mx-auto px-4 py-8 max-w-4xl">
       <div className="bg-white rounded-lg shadow-lg p-6 md:p-8">
-        <h1 className="text-3xl font-bold mb-6 text-center">Set Up Your Interview</h1>
+        <h1 className="text-3xl font-bold mb-6 text-center">Set Up Your Text Interview</h1>
+        
+        <div className="mb-6 text-center">
+          <p className="text-gray-600 mb-2">Prefer a voice conversation?</p>
+          <Link 
+            href="/interview/audio" 
+            className="text-indigo-600 hover:text-indigo-800 font-medium"
+          >
+            Switch to Voice Interview →
+          </Link>
+        </div>
         
         {error && (
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-6">
