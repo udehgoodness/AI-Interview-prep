@@ -1,4 +1,4 @@
-#!/Users/goody/Desktop/AI-Interview-prep/backend/venv/bin/python
+#!/Users/goody/Desktop/AI-Interview-prep/backend/venv/bin/python3.11
 # -*- coding: utf-8 -*-
 import re
 import sys

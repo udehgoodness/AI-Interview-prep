@@ -6,6 +6,8 @@ from typing import Optional, List, Dict, Any
 import os
 import json
 from dotenv import load_dotenv
+from .ai_service import AIService
+from .utils import extract_text_from_cv
 
 # Load environment variables
 load_dotenv()
@@ -26,8 +28,9 @@ app.add_middleware(
 class InterviewRequest(BaseModel):
     job_title: str
     job_description: str
-    interview_type: str
-    duration: int
+    cv_text: Optional[str] = None
+    interview_type: str = "general"
+    duration: int = 30
 
 class InterviewResponse(BaseModel):
     interview_id: str
@@ -44,6 +47,11 @@ class FeedbackResponse(BaseModel):
     weaknesses: List[str]
     improvement_areas: List[str]
 
+class InterviewEvaluation(BaseModel):
+    questions: List[Dict[str, Any]]
+    answers: List[Dict[str, Any]]
+    job_title: str
+
 # Routes
 @app.get("/")
 async def root():
@@ -52,82 +60,60 @@ async def root():
 @app.post("/api/upload-cv", response_model=dict)
 async def upload_cv(file: UploadFile = File(...)):
     """
-    Upload a CV/resume file
+    Upload and process a CV/resume file
     """
     try:
-        # Save the file temporarily
-        file_location = f"temp/{file.filename}"
+        # Create temp directory if it doesn't exist
         os.makedirs("temp", exist_ok=True)
         
+        # Save the file temporarily
+        file_location = f"temp/{file.filename}"
         with open(file_location, "wb+") as file_object:
             file_object.write(await file.read())
-            
-        # Here you would process the CV with AI
-        # For now, we'll just return a success message
-        return {"filename": file.filename, "status": "CV uploaded successfully"}
+        
+        # Extract text content from the CV
+        cv_text = extract_text_from_cv(file_location)
+        
+        if cv_text is None:
+            raise HTTPException(status_code=400, detail="Failed to process CV file")
+        
+        # Clean up the temporary file
+        os.remove(file_location)
+        
+        return {
+            "filename": file.filename,
+            "status": "CV processed successfully",
+            "cv_text": cv_text
+        }
+    except Exception as e:
+        # Clean up the temporary file in case of error
+        if os.path.exists(file_location):
+            os.remove(file_location)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/interview/questions")
+async def generate_questions(request: InterviewRequest):
+    try:
+        questions = AIService.generate_interview_questions(
+            job_title=request.job_title,
+            job_description=request.job_description,
+            cv_text=request.cv_text,
+            interview_type=request.interview_type,
+            duration=request.duration
+        )
+        return {"questions": questions}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/generate-interview", response_model=InterviewResponse)
-async def generate_interview(request: InterviewRequest):
-    """
-    Generate interview questions based on job details
-    """
+@app.post("/api/interview/evaluate")
+async def evaluate_interview(evaluation: InterviewEvaluation):
     try:
-        # Mock response - in production, this would call the AI service
-        mock_questions = [
-            {
-                "id": "q1",
-                "question": f"Tell me about your experience related to {request.job_title}?",
-                "type": "behavioral"
-            },
-            {
-                "id": "q2",
-                "question": "What are your strengths and weaknesses?",
-                "type": "behavioral"
-            },
-            {
-                "id": "q3",
-                "question": "How do you handle stress and pressure?",
-                "type": "behavioral"
-            }
-        ]
-        
-        if request.interview_type == "technical":
-            mock_questions.extend([
-                {
-                    "id": "q4",
-                    "question": "Write a function to reverse a string in your preferred language.",
-                    "type": "coding"
-                },
-                {
-                    "id": "q5",
-                    "question": f"Explain how you would implement a key feature for a {request.job_title} role.",
-                    "type": "technical"
-                }
-            ])
-        
-        return {
-            "interview_id": "mock-interview-123",
-            "questions": mock_questions
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/evaluate-interview", response_model=FeedbackResponse)
-async def evaluate_interview(request: FeedbackRequest):
-    """
-    Evaluate interview answers and provide feedback
-    """
-    try:
-        # Mock response - in production, this would call the AI service
-        return {
-            "score": 85,
-            "feedback": "Overall, you demonstrated good knowledge and communication skills.",
-            "strengths": ["Clear communication", "Technical knowledge", "Problem-solving approach"],
-            "weaknesses": ["Could provide more specific examples", "Some hesitation in responses"],
-            "improvement_areas": ["Practice more coding problems", "Prepare more concrete examples of past work"]
-        }
+        result = AIService.evaluate_interview(
+            questions=evaluation.questions,
+            answers=evaluation.answers,
+            job_title=evaluation.job_title
+        )
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
