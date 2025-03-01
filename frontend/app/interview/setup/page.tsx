@@ -54,7 +54,7 @@ export default function InterviewSetup() {
       }
 
       // Generate interview
-      const interviewResponse = await fetch('http://localhost:8000/api/generate-interview', {
+      const interviewResponse = await fetch('http://localhost:8000/api/interview/questions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
