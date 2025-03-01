@@ -13,6 +13,7 @@ export default function InterviewSetup() {
   const [cvFile, setCvFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [useVoiceMode, setUseVoiceMode] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -85,6 +86,7 @@ export default function InterviewSetup() {
         duration,
         questions: interviewData.questions,
         cvFilename: cvFile ? cvFile.name : null,
+        useVoiceMode: useVoiceMode
       }));
 
       // Navigate to the interview page
@@ -100,17 +102,7 @@ export default function InterviewSetup() {
   return (
     <div className="container mx-auto px-4 py-8 max-w-4xl">
       <div className="bg-white rounded-lg shadow-lg p-6 md:p-8">
-        <h1 className="text-3xl font-bold mb-6 text-center">Set Up Your Text Interview</h1>
-        
-        <div className="mb-6 text-center">
-          <p className="text-gray-600 mb-2">Prefer a voice conversation?</p>
-          <Link 
-            href="/interview/audio" 
-            className="text-indigo-600 hover:text-indigo-800 font-medium"
-          >
-            Switch to Voice Interview →
-          </Link>
-        </div>
+        <h1 className="text-3xl font-bold mb-6 text-center">Set Up Your Interview</h1>
         
         {error && (
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-6">
@@ -214,6 +206,35 @@ export default function InterviewSetup() {
                 <option value="60">60 minutes</option>
               </select>
             </div>
+          </div>
+          
+          <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-medium text-gray-900">Voice Mode</h3>
+                <p className="text-sm text-gray-500">Enable voice conversation with the AI interviewer</p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input 
+                  type="checkbox" 
+                  className="sr-only peer" 
+                  checked={useVoiceMode}
+                  onChange={() => setUseVoiceMode(!useVoiceMode)}
+                />
+                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+              </label>
+            </div>
+            {useVoiceMode && (
+              <div className="mt-3 text-sm text-gray-600 bg-indigo-50 p-3 rounded-md">
+                <p>Voice mode will allow you to:</p>
+                <ul className="list-disc pl-5 mt-1 space-y-1">
+                  <li>Speak your answers instead of typing</li>
+                  <li>Hear the interviewer's questions</li>
+                  <li>Have a more natural conversation experience</li>
+                </ul>
+                <p className="mt-2 text-xs">Note: This requires microphone access.</p>
+              </div>
+            )}
           </div>
           
           <div className="flex justify-between pt-4">

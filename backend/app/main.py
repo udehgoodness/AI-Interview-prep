@@ -70,6 +70,7 @@ class ConversationRequest(BaseModel):
     job_description: str
     conversation_history: List[ConversationMessage]
     current_question_index: int = 0
+    time_up: bool = False
 
 # Routes
 @app.get("/")
@@ -192,7 +193,8 @@ async def process_conversation(request: ConversationRequest):
             job_title=request.job_title,
             job_description=request.job_description,
             conversation_history=[msg.dict() for msg in request.conversation_history],
-            current_question_index=request.current_question_index
+            current_question_index=request.current_question_index,
+            time_up=request.time_up
         )
         
         return result

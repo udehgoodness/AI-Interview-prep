@@ -2,7 +2,6 @@ import os
 import logging
 import json
 import uuid
-import base64
 from typing import List, Dict, Any, Optional
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -13,6 +12,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 class AIService:
+    # Initialize the OpenAI client with only the api_key parameter
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.7"))
@@ -185,161 +185,4 @@ Interview Questions and Answers:
 
         except Exception as e:
             logger.error(f"Error evaluating interview: {str(e)}")
-            raise
-            
-    @staticmethod
-    def speech_to_text(audio_data: bytes, language: str = "en") -> str:
-        """
-        Convert speech to text using OpenAI's Whisper API
-        
-        Args:
-            audio_data: Binary audio data
-            language: Language code (default: 'en' for English)
-            
-        Returns:
-            Transcribed text
-        """
-        try:
-            # Create a temporary file to store the audio data
-            temp_file_path = f"temp/audio_{uuid.uuid4()}.webm"
-            os.makedirs("temp", exist_ok=True)
-            
-            with open(temp_file_path, "wb") as f:
-                f.write(audio_data)
-            
-            # Transcribe the audio using OpenAI's Whisper API
-            with open(temp_file_path, "rb") as audio_file:
-                transcript = AIService.client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=audio_file,
-                    language=language
-                )
-            
-            # Clean up the temporary file
-            if os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
-            
-            logger.info("Successfully transcribed audio")
-            return transcript.text
-            
-        except Exception as e:
-            logger.error(f"Error transcribing audio: {str(e)}")
-            # Clean up the temporary file in case of error
-            if 'temp_file_path' in locals() and os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
-            raise
-    
-    @staticmethod
-    def text_to_speech(text: str, voice: str = "alloy") -> bytes:
-        """
-        Convert text to speech using OpenAI's TTS API
-        
-        Args:
-            text: Text to convert to speech
-            voice: Voice to use (default: 'alloy')
-            
-        Returns:
-            Binary audio data
-        """
-        try:
-            # Generate speech using OpenAI's TTS API
-            response = AIService.client.audio.speech.create(
-                model="tts-1",
-                voice=voice,
-                input=text
-            )
-            
-            # Get the binary audio data
-            audio_data = response.content
-            
-            logger.info(f"Successfully generated speech for text: '{text[:50]}...'")
-            return audio_data
-            
-        except Exception as e:
-            logger.error(f"Error generating speech: {str(e)}")
-            raise
-    
-    @staticmethod
-    def process_interview_conversation(
-        job_title: str,
-        job_description: str,
-        conversation_history: List[Dict[str, str]],
-        current_question_index: int = 0,
-        time_up: bool = False
-    ) -> Dict[str, Any]:
-        """
-        Process a conversational interview exchange
-        
-        Args:
-            job_title: Job title
-            job_description: Job description
-            conversation_history: List of conversation messages with role and content
-            current_question_index: Current question index
-            time_up: Whether the interview time is up
-            
-        Returns:
-            AI response with text and audio
-        """
-        try:
-            # Prepare the system prompt
-            system_prompt = f"""You are an AI interviewer conducting a job interview for the position of {job_title}.
-Job Description: {job_description}
-
-Your task is to:
-1. Ask relevant questions about the candidate's experience and skills
-2. Follow up on their answers when appropriate
-3. Be professional, friendly, and encouraging
-4. Keep your responses concise (1-3 sentences)
-5. Focus on assessing the candidate's fit for the role
-6. ALWAYS include a follow-up question in your response
-7. Make your questions clear and direct
-
-Current question index: {current_question_index}"""
-
-            # If time is up, modify the system prompt
-            if time_up:
-                system_prompt = f"""You are an AI interviewer conducting a job interview for the position of {job_title}.
-Job Description: {job_description}
-
-The interview time is now up. Your task is to:
-1. Thank the candidate for their time
-2. Let them know the interview is concluding due to time constraints
-3. Be professional, friendly, and encouraging
-4. Keep your response concise (1-3 sentences)
-5. DO NOT ask any more questions
-6. DO NOT include any follow-up questions in your response
-7. DO NOT ask the candidate to elaborate on anything
-8. ONLY thank them and conclude the interview
-
-Example good response: "Thank you for your time today. Our interview has come to an end as we've reached the time limit. I appreciate your thoughtful responses."
-Example bad response: "Thank you for your time. Could you tell me one more thing about your experience?"
-"""
-
-            # Call OpenAI API for the conversation
-            response = AIService.client.chat.completions.create(
-                model=AIService.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    *conversation_history
-                ],
-                temperature=0.7,
-                max_tokens=150
-            )
-            
-            # Get the response text
-            response_text = response.choices[0].message.content
-            
-            # Generate speech from the response text
-            audio_data = AIService.text_to_speech(response_text)
-            
-            # Encode the audio data as base64
-            audio_base64 = base64.b64encode(audio_data).decode('utf-8')
-            
-            return {
-                "text": response_text,
-                "audio": audio_base64
-            }
-            
-        except Exception as e:
-            logger.error(f"Error processing interview conversation: {str(e)}")
             raise 

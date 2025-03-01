@@ -13,18 +13,12 @@ export default function Home() {
           <p className="text-xl md:text-2xl mb-10 max-w-3xl mx-auto">
             Practice with our AI-powered interview simulator that provides real-time feedback and personalized coaching.
           </p>
-          <div className="flex flex-col sm:flex-row justify-center gap-4">
+          <div className="flex justify-center">
             <Link 
               href="/interview/setup" 
               className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-8 rounded-lg text-lg transition-colors duration-300"
             >
-              Start Text Interview
-            </Link>
-            <Link 
-              href="/interview/audio" 
-              className="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-8 rounded-lg text-lg transition-colors duration-300"
-            >
-              Start Voice Interview
+              Start Interview
             </Link>
           </div>
         </div>
@@ -56,7 +50,7 @@ export default function Home() {
               </div>
               <h3 className="text-xl font-semibold text-center mb-2">2. Practice Interview</h3>
               <p className="text-gray-600 text-center">
-                Engage in a realistic interview with our AI interviewer through video or text.
+                Engage in a realistic interview with our AI interviewer through voice or text.
               </p>
             </div>
             
@@ -102,7 +96,7 @@ export default function Home() {
                   </div>
                   <div className="ml-3">
                     <h3 className="text-lg font-medium">Realistic Simulation</h3>
-                    <p className="mt-1 text-gray-600">Experience a lifelike interview environment with video and coding challenges.</p>
+                    <p className="mt-1 text-gray-600">Experience a lifelike interview environment with voice, video and coding challenges.</p>
                   </div>
                 </li>
                 <li className="flex items-start">
@@ -167,20 +161,12 @@ export default function Home() {
           <p className="text-xl mb-8 max-w-2xl mx-auto">
             Start practicing now and gain the confidence you need to succeed in your job interviews.
           </p>
-          <div className="flex flex-col sm:flex-row justify-center gap-4">
-            <Link 
-              href="/interview/setup" 
-              className="bg-white text-indigo-600 hover:bg-gray-100 font-bold py-3 px-8 rounded-lg text-lg transition-colors duration-300"
-            >
-              Text Interview
-            </Link>
-            <Link 
-              href="/interview/audio" 
-              className="bg-white text-green-600 hover:bg-gray-100 font-bold py-3 px-8 rounded-lg text-lg transition-colors duration-300 border-2 border-white"
-            >
-              Voice Interview
-            </Link>
-          </div>
+          <Link 
+            href="/interview/setup" 
+            className="bg-white text-indigo-600 hover:bg-gray-100 font-bold py-3 px-8 rounded-lg text-lg transition-colors duration-300"
+          >
+            Start Interview
+          </Link>
         </div>
       </section>
     </main>
