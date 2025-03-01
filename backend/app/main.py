@@ -6,8 +6,8 @@ from typing import Optional, List, Dict, Any
 import os
 import json
 from dotenv import load_dotenv
-from .ai_service import AIService
-from .utils import extract_text_from_cv
+from ai_service import AIService
+from utils import extract_text_from_cv
 
 # Load environment variables
 load_dotenv()
@@ -18,7 +18,7 @@ app = FastAPI(title="AI Interview Prep API")
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Frontend URL
+    allow_origins=["*"],  # Allow all origins in development
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -91,28 +91,40 @@ async def upload_cv(file: UploadFile = File(...)):
             os.remove(file_location)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/interview/questions")
+@app.post("/api/interview/questions", response_model=InterviewResponse)
 async def generate_questions(request: InterviewRequest):
     try:
-        questions = AIService.generate_interview_questions(
+        result = AIService.generate_interview_questions(
             job_title=request.job_title,
             job_description=request.job_description,
             cv_text=request.cv_text,
             interview_type=request.interview_type,
             duration=request.duration
         )
-        return {"questions": questions}
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/interview/evaluate")
-async def evaluate_interview(evaluation: InterviewEvaluation):
+@app.post("/api/evaluate-interview", response_model=FeedbackResponse)
+async def evaluate_interview(request: FeedbackRequest):
+    """
+    Evaluate interview answers and provide feedback
+    """
     try:
+        # Get interview data from request
+        interview_id = request.interview_id
+        answers = request.answers
+        
+        # In a real app, we would retrieve the interview questions from a database
+        # For now, we'll assume the client sends both questions and answers
+        
+        # Evaluate the interview
         result = AIService.evaluate_interview(
-            questions=evaluation.questions,
-            answers=evaluation.answers,
-            job_title=evaluation.job_title
+            questions=[],  # This would be retrieved from a database in a real app
+            answers=answers,
+            job_title="Job Position"  # This would be retrieved from a database in a real app
         )
+        
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -123,15 +135,6 @@ async def health_check():
     Health check endpoint
     """
     return {"status": "healthy"}
-
-# WebRTC signaling endpoint
-@app.post("/api/rtc/offer")
-async def rtc_offer(offer: dict):
-    """
-    Handle WebRTC offer for video call
-    """
-    # This would handle WebRTC signaling
-    return {"status": "offer received"}
 
 if __name__ == "__main__":
     import uvicorn
