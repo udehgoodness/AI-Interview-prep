@@ -95,11 +95,6 @@ export default function InterviewSession({ params }: { params: { id: string } })
     }
 
     return () => {
-      // Clean up WebRTC connection
-      if (peerConnectionRef.current) {
-        peerConnectionRef.current.close();
-      }
-      
       // Stop all media tracks
       if (localVideoRef.current && localVideoRef.current.srcObject) {
         const mediaStream = localVideoRef.current.srcObject as MediaStream;
@@ -120,70 +115,17 @@ export default function InterviewSession({ params }: { params: { id: string } })
         localVideoRef.current.srcObject = mediaStream;
       }
 
-      // Create RTCPeerConnection
-      const configuration = {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' }
-        ]
-      };
+      // Create a mock video stream for the remote video
+      const mockVideoStream = new MediaStream();
       
-      const peerConnection = new RTCPeerConnection(configuration);
-      peerConnectionRef.current = peerConnection;
+      // If we have a remote video element, set its source to the mock stream
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = mockVideoStream;
+      }
       
-      // Add local tracks to the connection
-      mediaStream.getTracks().forEach(track => {
-        peerConnection.addTrack(track, mediaStream);
-      });
-      
-      // Handle ICE candidates
-      peerConnection.onicecandidate = (event) => {
-        if (event.candidate) {
-          // In a real app, send this to the server
-          console.log('New ICE candidate:', event.candidate);
-        }
-      };
-      
-      // Handle connection state changes
-      peerConnection.onconnectionstatechange = () => {
-        console.log('Connection state:', peerConnection.connectionState);
-        if (peerConnection.connectionState === 'connected') {
-          setIsVideoConnected(true);
-        } else if (['disconnected', 'failed', 'closed'].includes(peerConnection.connectionState)) {
-          setIsVideoConnected(false);
-        }
-      };
-      
-      // Handle incoming tracks (would be from the AI in a real implementation)
-      peerConnection.ontrack = (event) => {
-        if (remoteVideoRef.current && event.streams[0]) {
-          remoteVideoRef.current.srcObject = event.streams[0];
-        }
-      };
-      
-      // Create and send offer (in a real app, this would go to the server)
-      const offer = await peerConnection.createOffer();
-      await peerConnection.setLocalDescription(offer);
-      
-      // Mock server response (in a real app, this would come from the server)
-      setTimeout(() => {
-        // Simulate receiving an answer from the server
-        const mockAnswer: RTCSessionDescriptionInit = {
-          type: 'answer',
-          sdp: offer.sdp // In a real app, this would be a proper SDP answer
-        };
-        
-        peerConnection.setRemoteDescription(new RTCSessionDescription(mockAnswer))
-          .then(() => {
-            console.log('Remote description set successfully');
-            setIsVideoConnected(true);
-          })
-          .catch(err => {
-            console.error('Error setting remote description:', err);
-          });
-      }, 1000);
-      
+      // Set recording and video connected states
       setIsRecording(true);
+      setIsVideoConnected(true);
     } catch (err) {
       console.error('Error initializing WebRTC:', err);
       setError('Failed to access camera or microphone. Please check your permissions.');
@@ -222,10 +164,14 @@ export default function InterviewSession({ params }: { params: { id: string } })
     
     try {
       // Format answers for submission
-      const formattedAnswers = Object.keys(answers).map(questionId => ({
-        question_id: questionId,
-        answer: answers[questionId]
-      }));
+      const formattedAnswers = Object.keys(answers).map(questionId => {
+        const question = interviewData.questions.find(q => q.id === questionId);
+        return {
+          question_id: questionId,
+          question: question?.question || '',
+          answer: answers[questionId]
+        };
+      });
       
       // Submit answers for evaluation
       const response = await fetch('http://localhost:8000/api/evaluate-interview', {
@@ -240,7 +186,8 @@ export default function InterviewSession({ params }: { params: { id: string } })
       });
       
       if (!response.ok) {
-        throw new Error('Failed to submit interview');
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to submit interview');
       }
       
       const evaluationData = await response.json();
@@ -256,6 +203,7 @@ export default function InterviewSession({ params }: { params: { id: string } })
       router.push(`/interview/results/${interviewData.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An unexpected error occurred');
+      console.error('Error:', err);
     } finally {
       setIsSubmitting(false);
     }

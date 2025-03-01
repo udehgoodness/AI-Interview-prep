@@ -36,7 +36,7 @@ export default function InterviewSetup() {
       }
 
       // Upload CV if provided
-      let cvUploadResponse = null;
+      let cvText = null;
       if (cvFile) {
         const formData = new FormData();
         formData.append('file', cvFile);
@@ -50,7 +50,8 @@ export default function InterviewSetup() {
           throw new Error('Failed to upload CV');
         }
         
-        cvUploadResponse = await response.json();
+        const cvUploadResponse = await response.json();
+        cvText = cvUploadResponse.cv_text;
       }
 
       // Generate interview
@@ -62,14 +63,15 @@ export default function InterviewSetup() {
         body: JSON.stringify({
           job_title: jobTitle,
           job_description: jobDescription,
+          cv_text: cvText,
           interview_type: interviewType,
           duration: duration,
-          cv_filename: cvFile ? cvFile.name : null,
         }),
       });
 
       if (!interviewResponse.ok) {
-        throw new Error('Failed to generate interview');
+        const errorData = await interviewResponse.json();
+        throw new Error(errorData.detail || 'Failed to generate interview');
       }
 
       const interviewData = await interviewResponse.json();
@@ -89,6 +91,7 @@ export default function InterviewSetup() {
       router.push(`/interview/session/${interviewData.interview_id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An unexpected error occurred');
+      console.error('Error:', err);
     } finally {
       setIsLoading(false);
     }
