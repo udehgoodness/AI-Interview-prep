@@ -13,7 +13,11 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 class AIService:
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    # Initialize OpenAI client with timeout settings
+    client = OpenAI(
+        api_key=os.getenv("OPENAI_API_KEY"),
+        timeout=60.0  # 60 seconds timeout for API calls
+    )
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.7"))
 
@@ -143,13 +147,17 @@ IMPORTANT: Ensure high diversity in your questions. Do not use generic templates
 Each time this API is called, generate completely different questions even for the same job title."""
 
             # Generate questions using OpenAI
+            # Use a longer timeout for longer interviews
+            timeout_override = 120.0 if duration >= 60 else 60.0  # 2 minutes for 60-min interviews
+            
             response = AIService.client.chat.completions.create(
                 model=AIService.model,
                 temperature=0.9,  # Increase temperature for more randomness
                 messages=[
                     {"role": "system", "content": f"You are an expert {interview_type} interviewer. Generate relevant and diverse {interview_type} interview questions based on the provided job details and seniority level ({seniority_level}). Avoid repetitive patterns and ensure each set of questions is unique. ONLY generate questions of the specified interview type with appropriate difficulty for the seniority level."},
                     {"role": "user", "content": context}
-                ]
+                ],
+                timeout=timeout_override  # Override the default timeout
             )
 
             # Parse the response

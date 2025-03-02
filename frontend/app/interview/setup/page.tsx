@@ -35,9 +35,10 @@ export default function InterviewSetup() {
     setError('');
     setDebugInfo('Starting interview setup...');
 
-    // Add a timeout to prevent getting stuck
+    // Add a timeout to prevent getting stuck - longer for longer interviews
+    const timeoutDuration = duration >= 60 ? 90000 : 45000; // 90 seconds for 60-min interviews, 45 seconds for others
     const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('Request timed out. Please try again.')), 30000);
+      setTimeout(() => reject(new Error('Request timed out. Please try again.')), timeoutDuration);
     });
 
     try {
