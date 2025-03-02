@@ -1,17 +1,19 @@
 import requests
 import json
+import pytest
 
-# Base URL for the API
+# Base URL for the API (will be overridden by the fixture)
 BASE_URL = "http://localhost:8000"
 
-def test_health():
+def test_health(api_base_url):
     """Test the health check endpoint"""
-    response = requests.get(f"{BASE_URL}/api/health")
+    response = requests.get(f"{api_base_url}/api/health")
     print(f"Health check: {response.status_code}")
     print(response.json())
     print()
+    assert response.status_code == 200
 
-def test_generate_questions():
+def test_generate_questions(api_base_url):
     """Test the generate questions endpoint"""
     data = {
         "job_title": "Software Engineer",
@@ -20,7 +22,7 @@ def test_generate_questions():
         "duration": 30
     }
     
-    response = requests.post(f"{BASE_URL}/api/interview/questions", json=data)
+    response = requests.post(f"{api_base_url}/api/interview/questions", json=data)
     print(f"Generate questions: {response.status_code}")
     if response.status_code == 200:
         result = response.json()
@@ -30,8 +32,11 @@ def test_generate_questions():
     else:
         print(response.text)
     print()
+    assert response.status_code == 200
+    assert 'interview_id' in response.json()
+    assert 'questions' in response.json()
 
-def test_evaluate_interview():
+def test_evaluate_interview(api_base_url):
     """Test the evaluate interview endpoint"""
     data = {
         "interview_id": "test-id",
@@ -49,21 +54,26 @@ def test_evaluate_interview():
         ]
     }
     
-    response = requests.post(f"{BASE_URL}/api/evaluate-interview", json=data)
+    response = requests.post(f"{api_base_url}/api/evaluate-interview", json=data)
     print(f"Evaluate interview: {response.status_code}")
     if response.status_code == 200:
         print(json.dumps(response.json(), indent=2))
     else:
         print(response.text)
     print()
+    assert response.status_code == 200
+    assert 'score' in response.json()
+    assert 'feedback' in response.json()
+    assert 'strengths' in response.json()
+    assert 'improvement_areas' in response.json()
 
 if __name__ == "__main__":
     print("Testing API endpoints...\n")
     
     try:
-        test_health()
-        test_generate_questions()
-        test_evaluate_interview()
+        test_health(BASE_URL)
+        test_generate_questions(BASE_URL)
+        test_evaluate_interview(BASE_URL)
         print("All tests completed.")
     except Exception as e:
         print(f"Error during testing: {str(e)}") 

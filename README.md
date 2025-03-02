@@ -29,6 +29,8 @@ An AI-powered interview preparation platform that helps users practice for job i
 
 - `/frontend` - Next.js frontend application
 - `/backend` - Python FastAPI backend application
+  - `/app` - Main backend application code
+  - `/tests` - Test files for the backend API
 
 ## Getting Started
 
@@ -50,6 +52,8 @@ cd ai-interview-prep
 ```bash
 cd frontend
 npm install
+# Copy the example environment file and modify as needed
+cp .env.local.example .env.local
 npm run dev
 ```
 
@@ -65,6 +69,8 @@ pip install -r requirements.txt
 ```
 OPENAI_API_KEY=your_openai_api_key
 ANTHROPIC_API_KEY=your_anthropic_api_key
+OPENAI_MODEL=gpt-4o-mini  # Optional: Specify which OpenAI model to use
+OPENAI_TEMPERATURE=0.7    # Optional: Control the randomness of responses
 ```
 
 5. Start the backend server:
@@ -82,6 +88,20 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 3. Start the interview session with AI interviewer
 4. Answer questions via video/voice or text
 5. Receive detailed feedback and evaluation after completion
+
+## Running Tests
+
+### Backend Tests
+
+To run the backend API tests:
+
+```bash
+cd backend
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+python -m pytest tests/
+```
+
+Make sure the backend server is not running when executing the tests.
 
 ## License
 

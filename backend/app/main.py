@@ -40,6 +40,8 @@ class InterviewResponse(BaseModel):
 class FeedbackRequest(BaseModel):
     interview_id: str
     answers: List[Dict[str, Any]]
+    job_title: Optional[str] = None
+    questions: Optional[List[Dict[str, Any]]] = None
 
 class FeedbackResponse(BaseModel):
     score: int
@@ -71,6 +73,11 @@ class ConversationRequest(BaseModel):
     conversation_history: List[ConversationMessage]
     current_question_index: int = 0
     time_up: bool = False
+    time_running_low: bool = False
+    no_response_detected: bool = False
+    is_code_submission: bool = False
+    question_type: str = "general"
+    include_follow_up: bool = True
 
 # Routes
 @app.get("/")
@@ -135,14 +142,17 @@ async def evaluate_interview(request: FeedbackRequest):
         interview_id = request.interview_id
         answers = request.answers
         
-        # In a real app, we would retrieve the interview questions from a database
-        # For now, we'll assume the client sends both questions and answers
+        # Use job title from request if available, otherwise use a default
+        job_title = request.job_title if hasattr(request, 'job_title') and request.job_title else "Job Position"
+        
+        # Use questions from request if available, otherwise use an empty list
+        questions = request.questions if hasattr(request, 'questions') and request.questions else []
         
         # Evaluate the interview
         result = AIService.evaluate_interview(
-            questions=[],  # This would be retrieved from a database in a real app
+            questions=questions,  # Use questions from the request
             answers=answers,
-            job_title="Job Position"  # This would be retrieved from a database in a real app
+            job_title=job_title
         )
         
         return result
@@ -194,7 +204,12 @@ async def process_conversation(request: ConversationRequest):
             job_description=request.job_description,
             conversation_history=[msg.dict() for msg in request.conversation_history],
             current_question_index=request.current_question_index,
-            time_up=request.time_up
+            time_up=request.time_up,
+            time_running_low=request.time_running_low,
+            no_response_detected=request.no_response_detected,
+            is_code_submission=request.is_code_submission,
+            question_type=request.question_type,
+            include_follow_up=request.include_follow_up
         )
         
         return result

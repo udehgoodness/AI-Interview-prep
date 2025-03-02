@@ -1,0 +1,6 @@
+# Test output files
+test_tts_output.mp3
+test_conversation_audio.mp3
+__pycache__/
+.pytest_cache/
+*.pyc 
