@@ -5,6 +5,9 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 
+// Add API base URL configuration
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
 // Dynamically import the Monaco Editor to avoid SSR issues
 const MonacoEditor = dynamic(
   () => import('@monaco-editor/react'),
@@ -15,6 +18,7 @@ interface Question {
   id: string;
   question: string;
   type: string;
+  difficulty?: string; // basic, intermediate, advanced
   expected_answer_points?: string[];
 }
 
@@ -27,6 +31,8 @@ interface InterviewData {
   questions: Question[];
   cvFilename?: string | null;
   useVoiceMode?: boolean;
+  useVideoMode?: boolean;
+  seniority_level?: string; // junior, mid, senior
 }
 
 export default function InterviewSession({ params }: { params: { id: string } }) {
@@ -40,9 +46,10 @@ export default function InterviewSession({ params }: { params: { id: string } })
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [isVideoConnected, setIsVideoConnected] = useState(false);
-  const [showVideo, setShowVideo] = useState(true);
+  const [showVideo, setShowVideo] = useState(false);
   const [messages, setMessages] = useState<Array<{ role: string; content: string }>>([]);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [answeredQuestions, setAnsweredQuestions] = useState<Set<string>>(new Set());
   
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -51,6 +58,7 @@ export default function InterviewSession({ params }: { params: { id: string } })
   const audioRef = useRef<HTMLAudioElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const conversationContainerRef = useRef<HTMLDivElement>(null);
 
   // Load interview data from localStorage
   useEffect(() => {
@@ -59,7 +67,40 @@ export default function InterviewSession({ params }: { params: { id: string } })
       const parsedData = JSON.parse(storedData);
       if (parsedData.id === params.id) {
         setInterviewData(parsedData);
-        setTimeLeft(parsedData.duration * 60); // Convert minutes to seconds
+        
+        // Check if we have a stored question index for this interview
+        const storedQuestionIndex = localStorage.getItem(`interview_question_${params.id}`);
+        if (storedQuestionIndex) {
+          setCurrentQuestionIndex(parseInt(storedQuestionIndex, 10));
+        }
+        
+        // Check if we have a stored timer value for this interview
+        const storedTimerData = localStorage.getItem(`interview_timer_${params.id}`);
+        
+        if (storedTimerData) {
+          // If we have stored timer data, use it
+          const { remainingTime, lastUpdated } = JSON.parse(storedTimerData);
+          
+          // Calculate how much time has passed since the timer was last updated
+          const timeElapsed = Math.floor((Date.now() - lastUpdated) / 1000);
+          
+          // Calculate the new remaining time, ensuring it doesn't go below 0
+          const newTimeLeft = Math.max(0, remainingTime - timeElapsed);
+          
+          // Set the timer to the calculated value
+          setTimeLeft(newTimeLeft);
+          
+          // If time is up, handle it
+          if (newTimeLeft === 0) {
+            handleTimeUp();
+          }
+        } else {
+          // If no stored timer data, initialize with the full duration
+          setTimeLeft(parsedData.duration * 60); // Convert minutes to seconds
+        }
+        
+        // Set video state based on useVideoMode setting
+        setShowVideo(parsedData.useVideoMode === true);
         
         // Initialize answers object
         const initialAnswers: Record<string, string> = {};
@@ -68,18 +109,42 @@ export default function InterviewSession({ params }: { params: { id: string } })
         });
         setAnswers(initialAnswers);
 
-        // If voice mode is enabled, initialize messages with first question
-        if (parsedData.useVoiceMode) {
-          const initialMessage = { 
-            role: 'assistant', 
-            content: `Hello! I'm your AI interviewer for the ${parsedData.jobTitle} position. I'll be asking you some questions to learn more about your experience and skills. Let's start with the first question: ${parsedData.questions[0].question}` 
-          };
-          setMessages([initialMessage]);
+        // Initialize messages with first question for both voice and text mode
+        if (messages.length === 0) {
+          // Check if we already have a greeting message to prevent duplication
+          const hasGreeting = messages.some(msg => 
+            msg.role === 'assistant' && 
+            (msg.content.toLowerCase().includes('hello') || 
+             msg.content.toLowerCase().includes('hi') ||
+             msg.content.toLowerCase().includes('welcome'))
+          );
           
-          // Speak the initial message after a short delay
-          setTimeout(() => {
-            speakMessage(initialMessage.content);
-          }, 1000);
+          if (!hasGreeting) {
+            let initialMessage;
+            
+            if (parsedData.useVoiceMode) {
+              initialMessage = { 
+                role: 'assistant', 
+                content: `Hello! I'll be your AI interviewer today. Let's start with the first question: ${parsedData.questions[0].question}` 
+              };
+            } else {
+              // For text mode, include a note about answering as many questions as possible
+              const seniorityLevel = parsedData.seniority_level || 'appropriate';
+              initialMessage = { 
+                role: 'assistant', 
+                content: `Welcome to your interview! This is a ${seniorityLevel}-level interview based on the job description you provided. You have ${parsedData.duration} minutes to answer as many questions as you can. The questions are tailored to the seniority level of the position. Let's begin with the first question: ${parsedData.questions[0].question}` 
+              };
+            }
+            
+            setMessages([initialMessage]);
+            
+            // Speak the initial message after a short delay for voice mode
+            if (parsedData.useVoiceMode) {
+              setTimeout(() => {
+                speakMessage(initialMessage.content);
+              }, 1000);
+            }
+          }
         }
       } else {
         setError('Interview data not found');
@@ -114,13 +179,24 @@ export default function InterviewSession({ params }: { params: { id: string } })
     if (timeLeft > 0 && interviewData) {
       timerRef.current = setInterval(() => {
         setTimeLeft((prev) => {
+          // Store the current timer state in localStorage
+          localStorage.setItem(`interview_timer_${interviewData.id}`, JSON.stringify({
+            remainingTime: prev,
+            lastUpdated: Date.now()
+          }));
+          
+          // When time is up, handle the end of interview
           if (prev <= 1) {
             clearInterval(timerRef.current as NodeJS.Timeout);
-            
-            // When time is up, handle the end of interview
             handleTimeUp();
             return 0;
           }
+          
+          // When there's only 1 minute left, send a time warning
+          if (prev === 60 && interviewData.useVoiceMode) {
+            handleTimeWarning();
+          }
+          
           return prev - 1;
         });
       }, 1000);
@@ -133,17 +209,99 @@ export default function InterviewSession({ params }: { params: { id: string } })
     };
   }, [timeLeft, interviewData]);
 
+  // Handle time warning when 1 minute is left
+  const handleTimeWarning = async () => {
+    if (!interviewData || !interviewData.useVoiceMode) return;
+    
+    try {
+      // Check if we already have a time warning message to prevent duplication
+      // Improved detection logic to catch more variations of time warning messages
+      const hasTimeWarning = messages.some(msg => {
+        if (msg.role !== 'assistant') return false;
+        
+        const content = msg.content.toLowerCase();
+        return (
+          content.includes('minute left') || 
+          content.includes('wrap up') ||
+          content.includes('running low') ||
+          content.includes('one minute') ||
+          content.includes('time is short') ||
+          content.includes('time is running') ||
+          content.includes('almost out of time') ||
+          content.includes('finishing up') ||
+          content.includes('concluding') ||
+          content.includes('final thoughts')
+        );
+      });
+      
+      if (hasTimeWarning) {
+        console.log("Time warning already issued, skipping duplicate");
+        return;
+      }
+      
+      // Add a time warning message to the conversation
+      const timeWarningMessage = { 
+        role: 'assistant', 
+        content: "We have about one minute left in our interview. I'll wrap up now and give you a chance for any final thoughts." 
+      };
+      
+      // Update state with the new message - use functional update to ensure we're working with the latest state
+      setMessages(prevMessages => [...prevMessages, timeWarningMessage]);
+      
+      // Speak the time warning message
+      await speakMessage(timeWarningMessage.content);
+    } catch (err) {
+      console.error("Error handling time warning:", err);
+    }
+  };
+
   // Handle time up scenario
   const handleTimeUp = async () => {
     if (!interviewData) return;
+    
+    // Clear the timer data from localStorage
+    localStorage.removeItem(`interview_timer_${interviewData.id}`);
+    
+    // Clear the question index data from localStorage
+    localStorage.removeItem(`interview_question_${interviewData.id}`);
     
     // For voice mode, add a final message from the AI
     if (interviewData.useVoiceMode && !isSubmitting) {
       // Don't add the message if already submitting or if AI is speaking
       if (!isSpeaking) {
         try {
+          // Check if we already have a time up message to prevent duplication
+          // Improved detection logic to catch more variations of closing messages
+          const hasTimeUpMessage = messages.some(msg => {
+            if (msg.role !== 'assistant') return false;
+            
+            const content = msg.content.toLowerCase();
+            return (
+              content.includes('time is up') || 
+              content.includes('thank you for your time') ||
+              content.includes('that concludes our interview') ||
+              content.includes('wrap up') ||
+              content.includes('appreciate your candidness') ||
+              content.includes('appreciate your insights') ||
+              content.includes('best of luck') ||
+              content.includes('next steps') ||
+              content.includes('hiring process') ||
+              content.includes('get back to you') ||
+              (content.includes('thank') && content.includes('interview'))
+            );
+          });
+          
+          if (hasTimeUpMessage) {
+            console.log("Time up message already issued, skipping duplicate");
+            // Submit the interview without adding another message
+            setTimeout(() => {
+              handleSubmitInterview();
+            }, 1000);
+            return;
+          }
+          
           // Get a special time-up message from the AI
-          const response = await fetch('http://localhost:8000/api/interview/conversation', {
+          const response = await fetch(`${API_BASE_URL}/api/interview/conversation`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -176,36 +334,37 @@ export default function InterviewSession({ params }: { params: { id: string } })
           const finalMessage = { role: 'assistant', content: timeUpMessage };
           setMessages(prev => [...prev, finalMessage]);
           
-          // Speak the time up message
-          if (data.audio) {
-            const audioSrc = `data:audio/mp3;base64,${data.audio}`;
-            if (audioRef.current) {
-              audioRef.current.src = audioSrc;
-              await audioRef.current.play();
-              
-              // Wait for audio to finish
-              await new Promise<void>((resolve) => {
-                const handleEnded = () => {
-                  if (audioRef.current) {
-                    audioRef.current.removeEventListener('ended', handleEnded);
-                  }
-                  resolve();
-                };
-                audioRef.current!.addEventListener('ended', handleEnded);
-              });
-            }
-          } else {
-            await speakMessage(timeUpMessage);
-          }
+          // Speak the time up message and ensure it completes before submitting
+          await speakMessage(timeUpMessage);
+          
+          // Add a delay to ensure the message is fully processed before submitting
+          setTimeout(() => {
+            handleSubmitInterview();
+          }, 2000);
         } catch (err) {
           console.error("Error getting time up message:", err);
+          // If there's an error, still try to submit the interview
+          setTimeout(() => {
+            handleSubmitInterview();
+          }, 1000);
         }
+      } else {
+        // If AI is speaking, wait for it to finish before submitting
+        console.log("AI is currently speaking, waiting before submitting...");
+        // Check every second if AI has finished speaking
+        const checkInterval = setInterval(() => {
+          if (!isSpeaking) {
+            clearInterval(checkInterval);
+            handleSubmitInterview();
+          }
+        }, 1000);
+        
+        // Set a maximum wait time of 10 seconds
+        setTimeout(() => {
+          clearInterval(checkInterval);
+          handleSubmitInterview();
+        }, 10000);
       }
-      
-      // Submit the interview after the message is spoken
-      setTimeout(() => {
-        handleSubmitInterview();
-      }, 1000);
     } else {
       // For text mode, just submit directly
       handleSubmitInterview();
@@ -222,13 +381,30 @@ export default function InterviewSession({ params }: { params: { id: string } })
       // Stop all media tracks
       if (localVideoRef.current && localVideoRef.current.srcObject) {
         const mediaStream = localVideoRef.current.srcObject as MediaStream;
-        mediaStream.getTracks().forEach(track => track.stop());
+        mediaStream.getTracks().forEach(track => {
+          track.stop();
+          console.log(`Cleanup: Stopped track: ${track.kind}, enabled: ${track.enabled}, readyState: ${track.readyState}`);
+        });
+        
+        // Clear the srcObject to fully release the camera
+        localVideoRef.current.srcObject = null;
+      }
+      
+      // Also stop any recording if active
+      if (mediaRecorderRef.current && isRecording) {
+        mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+        mediaRecorderRef.current.stop();
       }
     };
-  }, [interviewData, showVideo]);
+  }, [interviewData, showVideo, isRecording]);
 
   const initializeWebRTC = async () => {
     try {
+      // Only initialize camera if video is enabled
+      if (!showVideo) {
+        return;
+      }
+      
       // Get user media (camera and microphone)
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         video: true,
@@ -239,15 +415,7 @@ export default function InterviewSession({ params }: { params: { id: string } })
         localVideoRef.current.srcObject = mediaStream;
       }
 
-      // Create a mock video stream for the remote video
-      const mockVideoStream = new MediaStream();
-      
-      // If we have a remote video element, set its source to the mock stream
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = mockVideoStream;
-      }
-      
-      // Set recording and video connected states
+      // Set video connected state
       setIsVideoConnected(true);
     } catch (err) {
       console.error('Error initializing WebRTC:', err);
@@ -266,34 +434,185 @@ export default function InterviewSession({ params }: { params: { id: string } })
     }));
   };
 
-  const handleNextQuestion = async () => {
+  const handleSubmitAnswer = async () => {
     if (!interviewData) return;
     
-    // Don't allow moving to next question if currently processing or speaking
-    if (isProcessing || isSpeaking || isRecording) {
+    // Don't allow submission while AI is speaking or processing
+    if (isSpeaking || isProcessing || isRecording) {
+      console.log('Cannot submit answer: isSpeaking:', isSpeaking, 'isProcessing:', isProcessing, 'isRecording:', isRecording);
       return;
     }
     
-    if (currentQuestionIndex < interviewData.questions.length - 1) {
-      const nextIndex = currentQuestionIndex + 1;
-      setCurrentQuestionIndex(nextIndex);
+    const currentQuestion = interviewData.questions[currentQuestionIndex];
+    const answer = answers[currentQuestion.id];
+    
+    // Don't allow resubmission if already answered
+    if (answeredQuestions.has(currentQuestion.id)) {
+      setError('You have already submitted an answer for this question.');
+      setTimeout(() => setError(''), 3000);
+      return;
+    }
+    
+    if (!answer || answer.trim() === '') {
+      setError('Please provide an answer before submitting.');
+      setTimeout(() => setError(''), 3000);
+      return;
+    }
+    
+    console.log('Setting isProcessing to true');
+    setIsProcessing(true);
+    
+    try {
+      // Add user message with answer to conversation
+      const userMessage = { 
+        role: 'user', 
+        content: answer
+      };
       
-      // If voice mode is enabled, speak the next question
-      if (interviewData.useVoiceMode) {
-        // Add the next question to the conversation
-        const nextQuestion = interviewData.questions[nextIndex].question;
-        const questionMessage = { role: 'assistant', content: nextQuestion };
-        setMessages(prev => [...prev, questionMessage]);
-        
-        // Speak the next question
-        await speakMessage(nextQuestion);
+      // Update the conversation with the user's answer
+      const updatedMessages = [...messages, userMessage];
+      setMessages(updatedMessages);
+      
+      // Mark this question as answered
+      setAnsweredQuestions(prev => {
+        const updated = new Set(prev);
+        updated.add(currentQuestion.id);
+        return updated;
+      });
+      
+      // Get AI response with the answer
+      // Always include follow-up questions in both voice and text mode
+      const includeFollowUp = true;
+      await getAIResponse(updatedMessages, false, false, includeFollowUp);
+      
+      // No automatic advancement to the next question in text mode
+      // User will use the Next button to navigate
+    } catch (err) {
+      setError('Failed to submit answer. Please try again.');
+      console.error(err);
+    } finally {
+      console.log('Setting isProcessing to false in handleSubmitAnswer finally block');
+      setIsProcessing(false);
+    }
+  };
+
+  const handleSubmitCode = async () => {
+    if (!interviewData) return;
+    
+    // Don't allow submission while AI is speaking or processing
+    if (isSpeaking || isProcessing || isRecording) {
+      return;
+    }
+    
+    const currentQuestion = interviewData.questions[currentQuestionIndex];
+    const codeAnswer = answers[currentQuestion.id];
+    
+    if (!codeAnswer || codeAnswer.trim() === '' || codeAnswer.trim() === '// Write your code here') {
+      setError('Please write some code before submitting.');
+      setTimeout(() => setError(''), 3000);
+      return;
+    }
+    
+    setIsProcessing(true);
+    
+    try {
+      // Add user message with code to conversation
+      const userMessage = { 
+        role: 'user', 
+        content: `Here's my code for the question "${currentQuestion.question}":\n\n\`\`\`javascript\n${codeAnswer}\n\`\`\``
+      };
+      const updatedMessages = [...messages, userMessage];
+      setMessages(updatedMessages);
+      
+      // Get AI response with code analysis
+      await getAIResponse(updatedMessages, false, true);
+    } catch (err) {
+      setError('Failed to submit code. Please try again.');
+      console.error(err);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleNextQuestion = async () => {
+    console.log('handleNextQuestion called, current state:', {
+      isVoiceMode,
+      isSpeaking,
+      isRecording,
+      isProcessing,
+      currentQuestionIndex,
+      totalQuestions: interviewData?.questions.length
+    });
+    
+    if (!interviewData) return;
+    
+    // If we're at the last question, show a message that more questions could be generated
+    if (currentQuestionIndex >= interviewData.questions.length - 1) {
+      console.log('At last question, showing message about more questions');
+      
+      // Add a message to the conversation indicating more questions are available
+      if (!isVoiceMode && !messages.some(m => m.content.includes("You've reached the end of the prepared questions"))) {
+        const moreQuestionsMessage = { 
+          role: 'assistant', 
+          content: "You've reached the end of the prepared questions. Continue answering until your time runs out. The interview will automatically end when the timer reaches zero." 
+        };
+        setMessages(prev => [...prev, moreQuestionsMessage]);
       }
+      
+      return;
+    }
+    
+    // If there's an answer for the current question but it hasn't been submitted yet, submit it first
+    const currentQuestion = interviewData.questions[currentQuestionIndex];
+    const answer = answers[currentQuestion.id];
+    
+    // Force reset isProcessing if it's been true for too long
+    if (isProcessing) {
+      console.log('Force resetting isProcessing before navigation');
+      setIsProcessing(false);
+    }
+    
+    // Only try to submit if the answer exists and hasn't been submitted yet
+    if (answer && answer.trim() !== '' && !isProcessing && !answeredQuestions.has(currentQuestion.id)) {
+      console.log('Submitting answer before navigating');
+      await handleSubmitAnswer();
+    }
+    
+    console.log('Advancing to next question');
+    // Advance to the next question
+    const nextIndex = currentQuestionIndex + 1;
+    setCurrentQuestionIndex(nextIndex);
+    
+    // If in voice mode, speak the next question
+    if (isVoiceMode) {
+      const nextQuestion = interviewData.questions[nextIndex].question;
+      await speakMessage(nextQuestion);
+    } else {
+      // In text mode, add the next question to the conversation
+      const nextQuestion = interviewData.questions[nextIndex].question;
+      const questionMessage = { role: 'assistant', content: nextQuestion };
+      setMessages(prev => [...prev, questionMessage]);
     }
   };
 
   const handlePreviousQuestion = () => {
     if (currentQuestionIndex > 0) {
-      setCurrentQuestionIndex(prev => prev - 1);
+      // Check if the current question has been answered
+      const currentQuestion = interviewData?.questions[currentQuestionIndex];
+      const previousQuestion = interviewData?.questions[currentQuestionIndex - 1];
+      
+      if (currentQuestion && previousQuestion) {
+        const previousAnswer = answers[previousQuestion.id];
+        
+        // Only allow going back if the previous question hasn't been answered yet
+        if (!previousAnswer || previousAnswer.trim() === '') {
+          setCurrentQuestionIndex(prev => prev - 1);
+        } else {
+          // Show an error message if trying to go back to an answered question
+          setError("You can't go back to a question after submitting an answer.");
+          setTimeout(() => setError(''), 3000);
+        }
+      }
     }
   };
 
@@ -313,34 +632,52 @@ export default function InterviewSession({ params }: { params: { id: string } })
     setIsSubmitting(true);
     setError('');
     
+    // Clear the timer data from localStorage
+    localStorage.removeItem(`interview_timer_${interviewData.id}`);
+    
+    // Clear the question index data from localStorage
+    localStorage.removeItem(`interview_question_${interviewData.id}`);
+    
     try {
-      // Stop all media tracks from camera and microphone
+      // Stop all media tracks and ensure they're fully stopped
       if (localVideoRef.current && localVideoRef.current.srcObject) {
         const mediaStream = localVideoRef.current.srcObject as MediaStream;
-        mediaStream.getTracks().forEach(track => track.stop());
+        mediaStream.getTracks().forEach(track => {
+          track.stop();
+          console.log(`Stopped track: ${track.kind}, enabled: ${track.enabled}, readyState: ${track.readyState}`);
+        });
+        
+        // Clear the srcObject to fully release the camera
+        localVideoRef.current.srcObject = null;
+      }
+      
+      // Stop recording if active
+      if (mediaRecorderRef.current && isRecording) {
+        mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+        mediaRecorderRef.current.stop();
+        setIsRecording(false);
       }
       
       // Format answers for submission
-      // In voice mode, we may not have answered all predefined questions,
-      // but we still submit what we have
-      const formattedAnswers = Object.keys(answers).map(questionId => {
-        const question = interviewData.questions.find(q => q.id === questionId);
-        return {
-          question_id: questionId,
-          question: question?.question || '',
-          answer: answers[questionId]
-        };
-      });
+      const formattedAnswers = interviewData.questions.map(question => ({
+        question_id: question.id,
+        question: question.question,
+        question_type: question.type,
+        answer: answers[question.id] || ''
+      }));
       
       // Submit answers for evaluation
-      const response = await fetch('http://localhost:8000/api/evaluate-interview', {
+      const response = await fetch(`${API_BASE_URL}/api/evaluate-interview`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           interview_id: interviewData.id,
-          answers: formattedAnswers
+          answers: formattedAnswers,
+          job_title: interviewData.jobTitle,
+          interview_type: interviewData.interviewType,
+          questions: interviewData.questions // Include the questions in the evaluation request
         }),
       });
       
@@ -355,8 +692,54 @@ export default function InterviewSession({ params }: { params: { id: string } })
       localStorage.setItem('interviewEvaluation', JSON.stringify({
         interviewId: interviewData.id,
         jobTitle: interviewData.jobTitle,
+        interviewType: interviewData.interviewType,
+        timestamp: new Date().toISOString(), // Add timestamp to track when this evaluation was created
         ...evaluationData
       }));
+      
+      // Add a small delay to ensure all tracks are fully stopped before navigation
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Force a global cleanup of all media devices before navigation
+      try {
+        // Get all media devices and stop them
+        const allDevices = await navigator.mediaDevices.enumerateDevices();
+        console.log(`Cleaning up ${allDevices.length} media devices before navigation`);
+        
+        // Stop any active MediaStream tracks that might still be running
+        if (navigator.mediaDevices) {
+          const allTracks = document.querySelectorAll('video, audio');
+          allTracks.forEach(element => {
+            const mediaElement = element as HTMLMediaElement;
+            if (mediaElement.srcObject) {
+              const stream = mediaElement.srcObject as MediaStream;
+              if (stream) {
+                stream.getTracks().forEach(track => {
+                  track.stop();
+                  console.log(`Global cleanup: Stopped track: ${track.kind}`);
+                });
+                mediaElement.srcObject = null;
+              }
+            }
+          });
+        }
+      } catch (err) {
+        console.error('Error during global media cleanup:', err);
+      }
+      
+      // Additional cleanup for any getUserMedia streams that might be cached
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        try {
+          // This is a trick to force the browser to release camera permissions
+          const emptyStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+          emptyStream.getTracks().forEach(track => {
+            track.stop();
+            console.log(`Stopped empty stream track: ${track.kind}`);
+          });
+        } catch (err) {
+          console.log('No additional media streams to clean up');
+        }
+      }
       
       // Navigate to results page
       router.push(`/interview/results/${interviewData.id}`);
@@ -435,7 +818,7 @@ export default function InterviewSession({ params }: { params: { id: string } })
         const base64Data = base64Audio.split(',')[1];
         
         // Send to speech-to-text API
-        const response = await fetch('http://localhost:8000/api/speech-to-text', {
+        const response = await fetch(`${API_BASE_URL}/api/speech-to-text`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -451,23 +834,27 @@ export default function InterviewSession({ params }: { params: { id: string } })
         }
         
         const data = await response.json();
-        const transcribedText = data.text;
+        let transcribedText = data.text.trim();
+        
+        // Check if the transcribed text is empty or very short
+        const isEmptyResponse = transcribedText.length < 3;
+        
+        if (isEmptyResponse) {
+          console.log('Empty or inaudible response detected');
+          // Use a special flag to indicate no response was detected
+          transcribedText = "[NO_RESPONSE_DETECTED]";
+        }
         
         // Add user message to conversation
         const userMessage = { role: 'user', content: transcribedText };
         const updatedMessages = [...messages, userMessage];
         setMessages(updatedMessages);
         
-        // Save the answer to the current question
-        // We still need to track which question this answer belongs to for evaluation
-        const currentQuestion = interviewData.questions[currentQuestionIndex];
-        setAnswers(prev => ({
-          ...prev,
-          [currentQuestion.id]: transcribedText
-        }));
+        // Do NOT update the code editor with the transcribed text
+        // The code editor is for manual code input only
         
-        // Get AI response
-        await getAIResponse(updatedMessages);
+        // Get AI response with the empty response flag if needed
+        await getAIResponse(updatedMessages, isEmptyResponse);
       };
     } catch (err) {
       setError('Failed to process audio. Please try again.');
@@ -476,11 +863,25 @@ export default function InterviewSession({ params }: { params: { id: string } })
     }
   };
   
-  const getAIResponse = async (conversationHistory: Array<{ role: string; content: string }>) => {
+  const getAIResponse = async (
+    conversationHistory: Array<{ role: string; content: string }>, 
+    isEmptyResponse: boolean = false,
+    isCodeSubmission: boolean = false,
+    includeFollowUp: boolean = true
+  ) => {
     if (!interviewData) return;
     
+    // Set a timeout to reset isProcessing if the API call takes too long
+    const processingTimeout = setTimeout(() => {
+      console.log('API call timeout reached, resetting isProcessing');
+      setIsProcessing(false);
+    }, 15000); // 15 seconds timeout
+    
     try {
-      const response = await fetch('http://localhost:8000/api/interview/conversation', {
+      // Check if time is running low (less than 90 seconds)
+      const isTimeRunningLow = timeLeft < 90;
+      
+      const response = await fetch(`${API_BASE_URL}/api/interview/conversation`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -489,7 +890,13 @@ export default function InterviewSession({ params }: { params: { id: string } })
           job_title: interviewData.jobTitle,
           job_description: interviewData.jobDescription,
           conversation_history: conversationHistory,
-          current_question_index: currentQuestionIndex
+          current_question_index: currentQuestionIndex,
+          time_up: false,
+          time_running_low: isTimeRunningLow,
+          no_response_detected: isEmptyResponse,
+          is_code_submission: isCodeSubmission,
+          question_type: interviewData.questions[currentQuestionIndex]?.type || 'general',
+          include_follow_up: includeFollowUp
         }),
       });
       
@@ -499,41 +906,83 @@ export default function InterviewSession({ params }: { params: { id: string } })
       
       const data = await response.json();
       
-      // Add AI response to conversation
-      const aiMessage = { role: 'assistant', content: data.text };
-      setMessages([...conversationHistory, aiMessage]);
-      
-      // Play the audio response
-      if (data.audio) {
-        const audioSrc = `data:audio/mp3;base64,${data.audio}`;
-        if (audioRef.current) {
-          audioRef.current.src = audioSrc;
-          await audioRef.current.play();
-          
-          // Wait for audio to finish
-          await new Promise<void>((resolve) => {
-            const handleEnded = () => {
-              if (audioRef.current) {
-                audioRef.current.removeEventListener('ended', handleEnded);
-              }
-              resolve();
-            };
-            audioRef.current!.addEventListener('ended', handleEnded);
-          });
+      // Process the AI response
+      let aiResponseText = data.text;
+      if (isTimeRunningLow) {
+        // If time is running low, remove any questions to avoid asking follow-ups
+        if (aiResponseText.includes('?')) {
+          // Split by question mark and only keep the first part if it's not a time warning
+          const parts = aiResponseText.split('?');
+          if (parts.length > 1 && 
+              !aiResponseText.toLowerCase().includes('minute left') && 
+              !aiResponseText.toLowerCase().includes('time is running') &&
+              !aiResponseText.toLowerCase().includes('wrap up')) {
+            // Keep only the first question if there are multiple
+            aiResponseText = parts[0] + '?';
+          }
         }
-      } else {
-        // If no audio in response, generate speech and wait for it to finish
-        await speakMessage(data.text);
+        
+        // Ensure the response mentions time is running low if it doesn't already
+        if (!aiResponseText.toLowerCase().includes('time') && 
+            !aiResponseText.toLowerCase().includes('minute')) {
+          aiResponseText = `We're running low on time. ${aiResponseText}`;
+        }
       }
       
-      // We no longer automatically move to the next question
-      // The AI's response already includes a question for the user to answer
+      // Add AI response to conversation
+      const aiMessage = { role: 'assistant', content: aiResponseText };
+      setMessages([...conversationHistory, aiMessage]);
       
-    } catch (err) {
+      // Remove automatic advancement to next question in text mode
+      // User will use the Next button to navigate
+      
+      // Play the audio response only if in voice mode
+      if (interviewData.useVoiceMode) {
+        if (data.audio) {
+          const audioBlob = base64ToBlob(data.audio, 'audio/mpeg');
+          const audioUrl = URL.createObjectURL(audioBlob);
+          
+          if (audioRef.current) {
+            audioRef.current.src = audioUrl;
+            audioRef.current.onloadedmetadata = () => {
+              if (audioRef.current) {
+                setIsSpeaking(true);
+                audioRef.current.play().catch(err => {
+                  console.error('Error playing audio:', err);
+                  setIsSpeaking(false);
+                });
+              }
+            };
+            
+            // Handle audio playback end
+            const handleEnded = () => {
+              setIsSpeaking(false);
+              URL.revokeObjectURL(audioUrl);
+            };
+            
+            audioRef.current.onended = handleEnded;
+            audioRef.current.onerror = handleEnded;
+          }
+        } else {
+          // If no audio is returned, use browser TTS as fallback
+          await speakMessage(aiResponseText);
+        }
+      }
+      
+      return data;
+    } catch (error) {
+      console.error('Error getting AI response:', error);
       setError('Failed to get AI response. Please try again.');
-      console.error(err);
+      // Make sure to set isSpeaking to false in case of error
+      setIsSpeaking(false);
+      throw error;
     } finally {
+      // Clear the timeout
+      clearTimeout(processingTimeout);
+      
+      // Always set isProcessing to false when done
       setIsProcessing(false);
+      console.log('AI response processing completed, isProcessing set to false');
     }
   };
   
@@ -541,7 +990,7 @@ export default function InterviewSession({ params }: { params: { id: string } })
     try {
       setIsSpeaking(true);
       
-      const response = await fetch('http://localhost:8000/api/text-to-speech', {
+      const response = await fetch(`${API_BASE_URL}/api/text-to-speech`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -595,6 +1044,103 @@ export default function InterviewSession({ params }: { params: { id: string } })
     const secs = seconds % 60;
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
+
+  // Add a cleanup effect when component unmounts
+  useEffect(() => {
+    return () => {
+      // Final cleanup when component unmounts
+      if (localVideoRef.current && localVideoRef.current.srcObject) {
+        const mediaStream = localVideoRef.current.srcObject as MediaStream;
+        mediaStream.getTracks().forEach(track => {
+          track.stop();
+          console.log(`Unmount cleanup: Stopped track: ${track.kind}`);
+        });
+        localVideoRef.current.srcObject = null;
+      }
+      
+      // Stop any active recording
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+        try {
+          mediaRecorderRef.current.stop();
+        } catch (e) {
+          console.error('Error stopping media recorder:', e);
+        }
+      }
+      
+      // Clear any running timers
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+    };
+  }, []);
+
+  // Add a function to toggle video
+  const toggleVideo = async () => {
+    // If turning video on
+    if (!showVideo) {
+      setShowVideo(true);
+      // Initialize WebRTC after state update
+      setTimeout(() => {
+        initializeWebRTC();
+      }, 100);
+    } else {
+      // If turning video off, stop all tracks
+      if (localVideoRef.current && localVideoRef.current.srcObject) {
+        const stream = localVideoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach(track => {
+          track.stop();
+        });
+        localVideoRef.current.srcObject = null;
+      }
+      setShowVideo(false);
+      setIsVideoConnected(false);
+    }
+  };
+
+  // Auto-scroll conversation to bottom when messages change
+  useEffect(() => {
+    if (conversationContainerRef.current) {
+      conversationContainerRef.current.scrollTop = conversationContainerRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  // Utility function to convert base64 to Blob
+  const base64ToBlob = (base64: string, mimeType: string): Blob => {
+    const byteCharacters = atob(base64);
+    const byteArrays = [];
+    
+    for (let offset = 0; offset < byteCharacters.length; offset += 512) {
+      const slice = byteCharacters.slice(offset, offset + 512);
+      
+      const byteNumbers = new Array(slice.length);
+      for (let i = 0; i < slice.length; i++) {
+        byteNumbers[i] = slice.charCodeAt(i);
+      }
+      
+      const byteArray = new Uint8Array(byteNumbers);
+      byteArrays.push(byteArray);
+    }
+    
+    return new Blob(byteArrays, { type: mimeType });
+  };
+
+  // Save current question index to localStorage whenever it changes
+  useEffect(() => {
+    if (interviewData) {
+      localStorage.setItem(`interview_question_${interviewData.id}`, currentQuestionIndex.toString());
+    }
+  }, [currentQuestionIndex, interviewData]);
+
+  // Save timer state to localStorage every second
+  useEffect(() => {
+    if (timeLeft > 0 && interviewData) {
+      localStorage.setItem(`interview_timer_${interviewData.id}`, JSON.stringify({
+        remainingTime: timeLeft,
+        lastUpdated: Date.now()
+      }));
+    }
+  }, [timeLeft, interviewData]);
 
   if (error) {
     return (
@@ -650,24 +1196,30 @@ export default function InterviewSession({ params }: { params: { id: string } })
               <div className={`flex items-center ${isRecording ? 'text-red-400' : isSpeaking ? 'text-blue-400' : 'text-gray-400'}`}>
                 <span className={`h-3 w-3 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : isSpeaking ? 'bg-blue-500 animate-pulse' : 'bg-gray-500'} mr-1`}></span>
                 <span className="text-sm">{isRecording ? 'Recording' : isSpeaking ? 'AI Speaking' : 'Not Recording'}</span>
-              </div>
+            </div>
             )}
-            {showVideo && (
-              <button 
-                onClick={() => setShowVideo(false)}
-                className="text-sm bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded"
-              >
-                Hide Video
-              </button>
-            )}
-            {!showVideo && (
-              <button 
-                onClick={() => setShowVideo(true)}
-                className="text-sm bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded"
-              >
-                Show Video
-              </button>
-            )}
+            <button 
+              onClick={toggleVideo}
+              className="text-sm bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded flex items-center"
+            >
+              {showVideo ? (
+                <>
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
+                  Hide Video
+                </>
+              ) : (
+                <>
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
+                  Show Video
+                </>
+              )}
+            </button>
           </div>
         </div>
         
@@ -686,191 +1238,247 @@ export default function InterviewSession({ params }: { params: { id: string } })
                   className="w-full h-full object-cover"
                 ></video>
                 
-                {/* AI interviewer overlay - small picture-in-picture */}
-                <div className="absolute top-4 right-4 w-1/4 h-1/4 bg-gray-800 rounded overflow-hidden border-2 border-white">
-                  <img 
-                    src="/ai-interviewer-avatar.png" 
-                    alt="AI Interviewer"
-                    className="w-full h-full object-cover"
-                    onError={(e) => {
-                      // Fallback if the avatar image doesn't exist
-                      e.currentTarget.src = "https://via.placeholder.com/150?text=AI+Interviewer";
-                    }}
-                  />
-                </div>
-                
-                {!isVideoConnected && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-70 text-white">
-                    <div className="text-center">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mx-auto mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                      <p>Video connection failed. Using text-based interview mode.</p>
-                    </div>
-                  </div>
-                )}
-                
-                {/* Processing indicator overlay */}
-                {isProcessing && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white">
-                    <div className="text-center">
-                      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-2"></div>
-                      <p>Processing your response...</p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="h-64 overflow-y-auto bg-gray-50 rounded-lg mb-4 p-4">
-                {messages.map((message, index) => (
-                  <div 
-                    key={index} 
-                    className={`mb-4 p-3 rounded-lg ${
-                      message.role === 'assistant' 
-                        ? 'bg-blue-100 mr-12' 
-                        : 'bg-green-100 ml-12'
-                    }`}
-                  >
-                    <p className="text-sm font-semibold mb-1">
-                      {message.role === 'assistant' ? 'AI Interviewer' : 'You'}
-                    </p>
-                    <p>{message.content}</p>
-                  </div>
-                ))}
-                
-                {isProcessing && (
-                  <div className="flex justify-center items-center my-4">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
-                    <span className="ml-2 text-gray-600">Processing...</span>
-                  </div>
-                )}
-              </div>
-            )}
-            
-            {/* Voice controls or Question navigation */}
-            {isVoiceMode ? (
-              <div className="flex flex-col items-center">
-                <button
-                  onClick={toggleRecording}
-                  disabled={isProcessing || isSpeaking || timeLeft === 0}
-                  className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 ${
-                    isRecording 
-                      ? 'bg-red-600 hover:bg-red-700' 
-                      : isSpeaking || timeLeft === 0
-                        ? 'bg-gray-400 cursor-not-allowed'
-                        : 'bg-indigo-600 hover:bg-indigo-700'
-                  } text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500`}
-                >
-                  {isRecording ? (
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <rect x="6" y="6" width="12" height="12" strokeWidth="2" />
-                    </svg>
+                {/* Video status indicator */}
+                <div className="absolute bottom-2 right-2 flex items-center bg-gray-800 bg-opacity-75 text-white text-xs px-2 py-1 rounded">
+                  {isVideoConnected ? (
+                    <>
+                      <span className="h-2 w-2 rounded-full bg-green-500 mr-1"></span>
+                      <span>Camera On</span>
+                    </>
                   ) : (
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                    </svg>
+                    <>
+                      <span className="h-2 w-2 rounded-full bg-red-500 mr-1"></span>
+                      <span>Camera Off</span>
+                    </>
                   )}
-                </button>
-                <p className="text-sm text-gray-600 mb-2">
-                  {isRecording 
-                    ? 'Click to stop recording' 
-                    : isSpeaking
-                      ? 'Please wait for AI to finish speaking'
-                      : timeLeft === 0
-                        ? 'Time\'s up! Submitting interview...'
-                        : 'Click to start recording your answer'}
-                </p>
+                </div>
               </div>
             ) : (
-              <div className="flex justify-between items-center">
-                <button
-                  onClick={handlePreviousQuestion}
-                  disabled={currentQuestionIndex === 0}
-                  className={`px-4 py-2 rounded-md ${
-                    currentQuestionIndex === 0
-                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                      : 'bg-gray-700 text-white hover:bg-gray-800'
-                  }`}
-                >
-                  Previous
-                </button>
-                <span className="text-sm font-medium">
-                  Question {currentQuestionIndex + 1} of {interviewData.questions.length}
-                </span>
-                <button
-                  onClick={handleNextQuestion}
-                  disabled={currentQuestionIndex === interviewData.questions.length - 1}
-                  className={`px-4 py-2 rounded-md ${
-                    currentQuestionIndex === interviewData.questions.length - 1
-                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                      : 'bg-gray-700 text-white hover:bg-gray-800'
-                  }`}
-                >
-                  Next
-                </button>
+              // Show voice conversation UI when video is off
+              <div className="h-full flex flex-col">
+                <div className="text-center p-4 mb-4">
+                  <h2 className="text-xl font-semibold mb-2">Interview in Progress</h2>
+                  <p className="text-gray-600">
+                    {isVoiceMode 
+                      ? "Voice mode is active. Speak clearly to answer questions." 
+                      : "Type your answers in the text area below."}
+                  </p>
+              </div>
+              
+                {/* Only show conversation transcript in voice mode */}
+                {isVoiceMode && (
+                  <div className="h-[400px] border border-gray-200 rounded-lg shadow bg-white flex flex-col">
+                    <div className="bg-gray-50 px-4 py-2 border-b border-gray-200 text-sm font-medium text-gray-700">
+                      Conversation Transcript
+                    </div>
+                    <div 
+                      className="flex-1 overflow-y-auto p-4" 
+                      ref={conversationContainerRef}
+                      style={{ scrollBehavior: 'smooth' }}
+                    >
+                      <div className="space-y-4">
+                        {messages.map((message, index) => (
+                          <div 
+                            key={index} 
+                            className={`p-3 rounded-lg ${
+                              message.role === 'assistant' 
+                                ? 'bg-indigo-100 text-indigo-800' 
+                                : 'bg-gray-200 text-gray-800 ml-8'
+                            }`}
+                          >
+                            <p>{message.content}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                {/* For text mode, show a placeholder or instructions */}
+                {!isVoiceMode && (
+                  <div className="h-[400px] flex items-center justify-center">
+                    <div className="text-center text-gray-500">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 mx-auto mb-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                      </svg>
+                      <p className="text-lg font-medium">Text Mode Interview</p>
+                      <p className="mt-2">Answer the questions in the text area on the right.</p>
+                      <p className="mt-1">Click "Submit Answer" when you're ready to proceed.</p>
+            </div>
+                  </div>
+                )}
+            
+                {/* Voice mode controls */}
+                {isVoiceMode && (
+                  <div className="mt-4 flex justify-center">
+              <button
+                      onClick={toggleRecording}
+                      disabled={isSpeaking || isProcessing}
+                      className={`px-4 py-2 rounded-full flex items-center ${
+                        isRecording 
+                          ? 'bg-red-600 text-white hover:bg-red-700' 
+                          : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                      } ${(isSpeaking || isProcessing) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      {isRecording ? (
+                        <>
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
+                          </svg>
+                          Stop Recording
+                        </>
+                      ) : (
+                        <>
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                          </svg>
+                          Start Recording
+                        </>
+                      )}
+              </button>
+            </div>
+                )}
               </div>
             )}
           </div>
           
           {/* Question and answer section */}
-          <div className="bg-gray-100 rounded-lg p-4 flex flex-col">
+          <div className="bg-gray-100 rounded-lg p-4 flex flex-col h-auto">
             <div className="mb-4">
               {isVoiceMode ? (
                 <h2 className="text-lg font-semibold mb-2">
-                  Voice Interview
+                  Voice Interview - Code Editor
                 </h2>
               ) : (
                 <>
-                  <h2 className="text-lg font-semibold mb-2">
-                    Question {currentQuestionIndex + 1}: {currentQuestion.type.charAt(0).toUpperCase() + currentQuestion.type.slice(1)}
-                  </h2>
-                  <p className="text-gray-800 p-3 bg-white rounded-lg border border-gray-200">
-                    {currentQuestion.question}
-                  </p>
+              <h2 className="text-lg font-semibold mb-2">
+                Question {currentQuestionIndex + 1}: {currentQuestion.type.charAt(0).toUpperCase() + currentQuestion.type.slice(1)}
+                {currentQuestion.difficulty && (
+                  <span className={`ml-2 px-2 py-1 text-xs rounded-full ${
+                    currentQuestion.difficulty === 'basic' ? 'bg-green-100 text-green-800' :
+                    currentQuestion.difficulty === 'intermediate' ? 'bg-yellow-100 text-yellow-800' :
+                    'bg-red-100 text-red-800'
+                  }`}>
+                    {currentQuestion.difficulty.charAt(0).toUpperCase() + currentQuestion.difficulty.slice(1)}
+                  </span>
+                )}
+              </h2>
+              <p className="text-gray-800 p-3 bg-white rounded-lg border border-gray-200">
+                {currentQuestion.question}
+              </p>
                 </>
               )}
             </div>
             
-            <div className="flex-grow">
+            <div className="flex-1">
               {isVoiceMode ? (
-                <div className="h-full min-h-[200px] p-3 border border-gray-300 rounded-lg bg-white overflow-y-auto">
-                  <p className="text-gray-500 italic mb-2">Conversation Transcript:</p>
-                  {messages.map((message, index) => (
-                    <div key={index} className="mb-3">
-                      <p className="font-semibold text-sm">
-                        {message.role === 'assistant' ? 'AI Interviewer:' : 'You:'}
-                      </p>
-                      <p className={`pl-2 border-l-2 ${message.role === 'assistant' ? 'border-blue-400' : 'border-green-400'}`}>
-                        {message.content}
-                      </p>
-                    </div>
-                  ))}
-                  {!messages.length && <p className="text-gray-400">No conversation yet</p>}
-                </div>
-              ) : (
-                currentQuestion.type === 'coding' ? (
-                  <div className="h-full min-h-[300px] border border-gray-300 rounded-lg overflow-hidden">
+                <div className="flex flex-col h-[400px] max-h-[400px]">
+                  {/* Code Editor for Voice Mode - Fixed Height */}
+                  <div className="h-full border border-gray-300 rounded-lg overflow-hidden">
+                    <p className="text-sm text-gray-600 p-2 bg-gray-100 border-b border-gray-300">
+                      Use this editor to write code for {
+                        // Get the latest question from the AI messages if available
+                        messages.length > 0 
+                          ? (() => {
+                              // Find the last assistant message that contains a question
+                              const lastAssistantMessages = messages
+                                .filter(m => m.role === 'assistant')
+                                .reverse();
+                              
+                              // Try to find a message with a question mark that isn't a time warning
+                              for (const msg of lastAssistantMessages) {
+                                if (msg.content.includes('?') && 
+                                    !msg.content.toLowerCase().includes('minute left') && 
+                                    !msg.content.toLowerCase().includes('time is running') &&
+                                    !msg.content.toLowerCase().includes('wrap up')) {
+                                  // Extract the question part
+                                  const parts = msg.content.split('?');
+                                  if (parts.length > 0) {
+                                    return parts[0] + '?';
+                                  }
+                                }
+                              }
+                              
+                              // Fallback to the current question from interview data
+                              return interviewData?.questions[currentQuestionIndex]?.question || 'Loading question...';
+                            })()
+                          : interviewData?.questions[currentQuestionIndex]?.question || 'Loading question...'
+                      }
+                    </p>
                     <MonacoEditor
-                      height="100%"
+                      height="calc(100% - 35px)"
                       language="javascript"
-                      theme="vs-dark"
-                      value={answers[currentQuestion.id] || '// Write your code here'}
-                      onChange={handleAnswerChange}
+                      theme="vs-light"
+                      value={answers[currentQuestion.id] || '// Write your code here\n\n'}
+                      onChange={(value) => handleAnswerChange(value)}
                       options={{
                         minimap: { enabled: false },
                         scrollBeyondLastLine: false,
                         fontSize: 14,
+                        automaticLayout: true,
+                        wordWrap: 'on',
+                        lineNumbers: 'on',
+                        tabSize: 2,
                       }}
                     />
                   </div>
-                ) : (
-                  <textarea
-                    value={answers[currentQuestion.id] || ''}
-                    onChange={(e) => handleAnswerChange(e.target.value)}
-                    placeholder="Type your answer here..."
-                    className="w-full h-full min-h-[300px] p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
-                    rows={10}
-                  ></textarea>
+                  <div className="mt-2 flex justify-end">
+                    <button
+                      onClick={() => handleSubmitCode()}
+                      disabled={isSpeaking || isProcessing || isRecording}
+                      className={`px-4 py-2 rounded-md bg-indigo-600 text-white font-medium hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 ${
+                        isSpeaking || isProcessing || isRecording ? 'opacity-50 cursor-not-allowed' : ''
+                      }`}
+                    >
+                      Submit Code
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                currentQuestion.type === 'coding' ? (
+                  <div className="h-[400px] border border-gray-300 rounded-lg overflow-hidden">
+                  <MonacoEditor
+                    height="100%"
+                    language="javascript"
+                      theme="vs-light"
+                      value={answers[currentQuestion.id] || '// Write your code here\n\n'}
+                      onChange={(value) => handleAnswerChange(value)}
+                    options={{
+                      minimap: { enabled: false },
+                      scrollBeyondLastLine: false,
+                      fontSize: 14,
+                        automaticLayout: true,
+                        wordWrap: 'on',
+                        lineNumbers: 'on',
+                        tabSize: 2,
+                    }}
+                  />
+                </div>
+              ) : (
+                  <div className="flex flex-col h-full">
+                    <div className="mt-4">
+                <textarea
+                        value={answers[interviewData.questions[currentQuestionIndex]?.id] || ''}
+                  onChange={(e) => handleAnswerChange(e.target.value)}
+                  placeholder="Type your answer here..."
+                        className="w-full p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                        rows={6}
+                        disabled={isSpeaking || isProcessing}
+                      />
+                    </div>
+                    <div className="mt-2 flex justify-end">
+                      <button
+                        onClick={handleSubmitAnswer}
+                        disabled={isSpeaking || isProcessing || answeredQuestions.has(interviewData.questions[currentQuestionIndex]?.id)}
+                        className={`px-4 py-2 rounded-md bg-indigo-600 text-white font-medium hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 ${
+                          isSpeaking || isProcessing || answeredQuestions.has(interviewData.questions[currentQuestionIndex]?.id) ? 'opacity-50 cursor-not-allowed' : ''
+                        }`}
+                      >
+                        Submit Answer
+                      </button>
+                    </div>
+                  </div>
                 )
               )}
             </div>
@@ -885,6 +1493,38 @@ export default function InterviewSession({ params }: { params: { id: string } })
           >
             End Interview
           </Link>
+          
+          {/* Navigation buttons - only show in text mode */}
+          {!isVoiceMode && (
+            <div className="flex space-x-2 items-center">
+              <button
+                onClick={handlePreviousQuestion}
+                disabled={currentQuestionIndex === 0 || (currentQuestionIndex > 0 && answeredQuestions.has(interviewData.questions[currentQuestionIndex - 1]?.id))}
+                className={`px-4 py-2 rounded-md ${
+                  currentQuestionIndex === 0 || (currentQuestionIndex > 0 && answeredQuestions.has(interviewData.questions[currentQuestionIndex - 1]?.id))
+                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                    : 'bg-gray-700 text-white hover:bg-gray-800'
+                }`}
+              >
+                Previous
+              </button>
+              <span className="text-sm font-medium">
+                Question {currentQuestionIndex + 1} of {interviewData.questions.length}
+              </span>
+              <button
+                onClick={handleNextQuestion}
+                disabled={currentQuestionIndex === interviewData.questions.length - 1}
+                className={`px-4 py-2 rounded-md ${
+                  currentQuestionIndex === interviewData.questions.length - 1
+                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                    : 'bg-gray-700 text-white hover:bg-gray-800'
+                }`}
+              >
+                Next
+              </button>
+            </div>
+          )}
+          
           <button
             onClick={handleSubmitInterview}
             disabled={isSubmitting || timeLeft === 0}
@@ -901,8 +1541,8 @@ export default function InterviewSession({ params }: { params: { id: string } })
         </div>
       </div>
       
-      {/* Hidden audio element for playing responses */}
-      <audio ref={audioRef} className="hidden" />
+      {/* Audio element for TTS playback */}
+      <audio ref={audioRef} className="hidden"></audio>
     </div>
   );
 } 
