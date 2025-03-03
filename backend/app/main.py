@@ -7,8 +7,10 @@ import os
 import json
 import base64
 from dotenv import load_dotenv
-from ai_service import AIService
+from ai_service import AIService, question_cache, set_question_progress
 from utils import extract_text_from_cv
+import uuid
+import time
 
 # Load environment variables
 load_dotenv()
@@ -79,6 +81,12 @@ class ConversationRequest(BaseModel):
     question_type: str = "general"
     include_follow_up: bool = True
 
+# In-memory store for tracking question generation progress
+question_progress = {}
+
+# Set the question_progress reference in AIService
+set_question_progress(question_progress)
+
 # Routes
 @app.get("/")
 async def root():
@@ -121,16 +129,71 @@ async def upload_cv(file: UploadFile = File(...)):
 @app.post("/api/interview/questions", response_model=InterviewResponse)
 async def generate_questions(request: InterviewRequest):
     try:
+        # Create a progress tracking entry
+        progress_id = f"progress_{uuid.uuid4()}"
+        question_progress[progress_id] = {
+            "total": request.duration,
+            "generated": 0,
+            "questions": [],
+            "timestamp": time.time()
+        }
+        
+        # Generate questions
         result = AIService.generate_interview_questions(
             job_title=request.job_title,
             job_description=request.job_description,
             cv_text=request.cv_text,
             interview_type=request.interview_type,
-            duration=request.duration
+            duration=request.duration,
+            progress_id=progress_id
         )
+        
+        # Clean up progress tracking after completion
+        if progress_id in question_progress:
+            del question_progress[progress_id]
+            
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/interview/questions/progress")
+async def get_question_progress(id: str = None):
+    """
+    Get the progress of question generation
+    """
+    # Clean up old progress entries (older than 10 minutes)
+    current_time = time.time()
+    keys_to_remove = []
+    for key, data in question_progress.items():
+        if current_time - data.get("timestamp", 0) > 600:  # 10 minutes
+            keys_to_remove.append(key)
+    
+    for key in keys_to_remove:
+        del question_progress[key]
+    
+    # If no ID is provided, return all progress
+    if not id:
+        # For security, don't return the actual questions in this case
+        return {
+            "progress": {k: {"total": v["total"], "generated": v["generated"]} 
+                        for k, v in question_progress.items()}
+        }
+    
+    # Return progress for the specified ID
+    if id in question_progress:
+        return question_progress[id]
+    
+    # If ID is not found but looks like a temp ID from frontend, return simulated progress
+    if id.startswith("temp_"):
+        # This is a simulated progress for the frontend polling
+        # In a real implementation, you would track actual progress
+        return {
+            "questions": [],
+            "total": 0,
+            "generated": 0
+        }
+    
+    raise HTTPException(status_code=404, detail="Progress ID not found")
 
 @app.post("/api/evaluate-interview", response_model=FeedbackResponse)
 async def evaluate_interview(request: FeedbackRequest):

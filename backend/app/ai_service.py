@@ -3,6 +3,12 @@ import logging
 import json
 import uuid
 import base64
+import hashlib
+import asyncio
+import functools
+import concurrent.futures
+import time
+import sys
 from typing import List, Dict, Any, Optional
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -12,6 +18,18 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+# Simple in-memory cache for interview questions
+question_cache = {}
+
+# Import question_progress from main.py
+# We need to handle circular imports carefully
+question_progress = {}
+
+def set_question_progress(progress_dict):
+    """Set the question_progress reference from main.py"""
+    global question_progress
+    question_progress = progress_dict
+
 class AIService:
     # Initialize OpenAI client with timeout settings
     client = OpenAI(
@@ -20,7 +38,26 @@ class AIService:
     )
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.7"))
-
+    
+    # Cache TTL in seconds (24 hours)
+    CACHE_TTL = 86400
+    
+    @staticmethod
+    def _generate_cache_key(job_title, job_description, interview_type, duration):
+        """Generate a cache key based on input parameters"""
+        # Create a string combining all parameters
+        combined = f"{job_title.lower()}|{job_description.lower()}|{interview_type}|{duration}"
+        # Create a hash of the combined string
+        return hashlib.md5(combined.encode()).hexdigest()
+    
+    @staticmethod
+    def _is_cache_valid(cache_entry):
+        """Check if a cache entry is still valid based on timestamp"""
+        if not cache_entry or 'timestamp' not in cache_entry:
+            return False
+        current_time = asyncio.get_event_loop().time()
+        return (current_time - cache_entry['timestamp']) < AIService.CACHE_TTL
+    
     @staticmethod
     def generate_interview_questions(
         job_title: str,
@@ -28,12 +65,28 @@ class AIService:
         cv_text: Optional[str] = None,
         interview_type: str = "general",
         duration: int = 30,
-        model: str = "openai"
+        model: str = "openai",
+        progress_id: str = None
     ) -> Dict[str, Any]:
         """
         Generate interview questions using OpenAI's API based on job details and CV
         """
         try:
+            # Check cache first (only if no CV is provided, as CV makes it unique)
+            if not cv_text:
+                cache_key = AIService._generate_cache_key(job_title, job_description, interview_type, duration)
+                cache_entry = question_cache.get(cache_key)
+                
+                if cache_entry and AIService._is_cache_valid(cache_entry):
+                    logger.info(f"Cache hit for job: {job_title}, returning cached questions")
+                    
+                    # If we're tracking progress, update it to complete immediately
+                    if progress_id and progress_id in question_progress:
+                        question_progress[progress_id]["generated"] = duration
+                        question_progress[progress_id]["questions"] = cache_entry['data']["questions"]
+                    
+                    return cache_entry['data']
+            
             # Determine seniority level from job title and description
             seniority_level = "mid"  # Default to mid-level
             
@@ -55,61 +108,41 @@ class AIService:
             logger.info(f"Detected seniority level: {seniority_level} for job: {job_title}")
             
             # Calculate number of questions based on duration - one question per minute
-            # For example: 5 minutes = 5 questions, 15 minutes = 15 questions, etc.
             num_questions = duration
             
             logger.info(f"Generating {num_questions} questions for {duration} minute interview")
             
-            # Define question type instruction based on interview_type
+            # Define question type instruction based on interview_type - SIMPLIFIED for faster responses
             question_type_instruction = ""
             if interview_type == "technical":
-                question_type_instruction = """Generate ONLY technical questions. Include a mix of:
-1. Conceptual technical questions about principles, patterns, and best practices
-2. Problem-solving questions that test analytical thinking
-3. Coding questions that require writing actual code (mark these as type 'coding')
-4. System design questions for more senior roles
-Do not include any behavioral or leadership questions."""
+                question_type_instruction = "Generate ONLY technical questions. Include conceptual, problem-solving, and coding questions."
             elif interview_type == "behavioral":
-                question_type_instruction = "Generate ONLY behavioral questions. Do not include any technical or leadership questions."
+                question_type_instruction = "Generate ONLY behavioral questions."
             elif interview_type == "leadership":
-                question_type_instruction = "Generate ONLY leadership questions. Do not include any technical or behavioral questions."
+                question_type_instruction = "Generate ONLY leadership questions."
             else:  # general
-                question_type_instruction = """Generate a mix of question types, including both technical and behavioral questions.
-For technical roles, include at least one coding question that requires writing actual code (mark as type 'coding')."""
+                question_type_instruction = "Generate a mix of technical and behavioral questions."
             
-            # Add difficulty level instruction based on seniority
-            difficulty_instruction = ""
-            if seniority_level == "junior":
-                difficulty_instruction = """
-Focus on BASIC to INTERMEDIATE difficulty questions appropriate for junior/entry-level candidates:
-- Basic knowledge and fundamental concepts
-- Simple problem-solving scenarios
-- Straightforward coding questions (if applicable)
-- Questions that assess potential and learning ability
-- Avoid complex system design or architecture questions"""
-            elif seniority_level == "senior":
-                difficulty_instruction = """
-Focus on INTERMEDIATE to ADVANCED difficulty questions appropriate for senior-level candidates:
-- Deep technical knowledge and expertise
-- Complex problem-solving scenarios
-- Advanced coding challenges (if applicable)
-- System design and architecture questions
-- Questions that assess leadership and mentoring abilities
-- Avoid basic knowledge questions that would be too simple for experienced professionals"""
-            else:  # mid-level
-                difficulty_instruction = """
-Focus on a MIX of difficulty levels with emphasis on INTERMEDIATE questions:
-- Solid technical knowledge beyond basics
-- Moderate complexity problem-solving scenarios
-- Intermediate coding challenges (if applicable)
-- Some basic system design questions
-- Balance between technical depth and breadth"""
+            # Add difficulty level instruction based on seniority - SIMPLIFIED for faster responses
+            difficulty_instruction = f"Focus on {seniority_level}-level difficulty questions appropriate for the position."
             
-            # Prepare the context for question generation
-            context = f"""Job Title: {job_title}
+            # Generate a unique interview ID
+            interview_id = str(uuid.uuid4())
+            
+            # For parallel processing, split into batches
+            batch_size = 10  # Generate 10 questions per batch
+            num_batches = (num_questions + batch_size - 1) // batch_size  # Ceiling division
+            
+            # Function to generate a batch of questions
+            def generate_batch(batch_index, batch_size, existing_questions=None):
+                # Calculate how many questions to generate in this batch
+                remaining = num_questions - batch_index * batch_size
+                current_batch_size = min(batch_size, remaining)
+                
+                # Prepare the context for question generation - SIMPLIFIED for faster responses
+                context = f"""Job Title: {job_title}
 Job Description: {job_description}
 Interview Type: {interview_type}
-Duration: {duration} minutes
 Seniority Level: {seniority_level}
 
 {"CV Content: " + cv_text if cv_text else "No CV provided"}
@@ -118,82 +151,115 @@ Seniority Level: {seniority_level}
 
 {difficulty_instruction}
 
-Generate {num_questions} diverse and unique interview questions for this position. 
-These questions should be tailored to the {seniority_level}-level position as specified above.
-Ensure the questions are different from standard template questions.
-For each question:
-1. Make it specific to the job role and requirements
-2. For technical questions, include expected key points in the answer
-3. Ensure variety and avoid repetitive patterns in questions
-4. Use creative and thoughtful phrasing to make each question unique
-
+Generate {current_batch_size} diverse and unique interview questions for this position.
 Format each question as a JSON object with:
 - id: unique identifier
 - question: the actual question text
-- type: one of ["technical", "behavioral", "leadership", "coding"] based on the question type
+- type: one of ["technical", "behavioral", "leadership", "coding"]
 - expected_answer_points: array of key points for a good answer
-- difficulty: one of ["basic", "intermediate", "advanced"] based on the question difficulty
+- difficulty: one of ["basic", "intermediate", "advanced"]
 
-For coding questions, provide a clear problem statement that requires writing code, and include expected_answer_points that cover:
-1. The correct algorithm or approach
-2. Time and space complexity considerations
-3. Edge case handling
-4. Code quality aspects"""
+"""
+                # If we have existing questions, make sure new ones are different
+                if existing_questions:
+                    context += f"\nEnsure these questions are different from: {', '.join([q['question'] for q in existing_questions])}"
 
-            # Add randomness instruction to ensure different questions each time
-            context += """
+                # Use a longer timeout for longer interviews
+                timeout_override = 60.0  # Standard timeout
+                
+                response = AIService.client.chat.completions.create(
+                    model=AIService.model,
+                    temperature=0.9,  # Increase temperature for more randomness
+                    messages=[
+                        {"role": "system", "content": f"You are an expert {interview_type} interviewer. Generate relevant and diverse questions."},
+                        {"role": "user", "content": context}
+                    ],
+                    timeout=timeout_override
+                )
 
-IMPORTANT: Ensure high diversity in your questions. Do not use generic templates or common phrasings.
-Each time this API is called, generate completely different questions even for the same job title."""
+                # Parse the response
+                questions_text = response.choices[0].message.content
+                
+                # Clean up the response to ensure it's valid JSON
+                if "```json" in questions_text:
+                    questions_text = questions_text.split("```json")[1].split("```")[0].strip()
+                elif "```" in questions_text:
+                    questions_text = questions_text.split("```")[1].split("```")[0].strip()
+                
+                # Handle case where response might be an array or individual objects
+                if questions_text.startswith("[") and questions_text.endswith("]"):
+                    batch_questions = json.loads(questions_text)
+                else:
+                    # If not properly formatted as an array, try to parse individual objects
+                    questions_text = questions_text.strip().strip(',')
+                    batch_questions = json.loads(f"[{questions_text}]")
 
-            # Generate questions using OpenAI
-            # Use a longer timeout for longer interviews
-            timeout_override = 120.0 if duration >= 60 else 60.0  # 2 minutes for 60-min interviews
+                # Ensure all questions have the correct type and add seniority level
+                for question in batch_questions:
+                    if "type" not in question or not question["type"] in ["technical", "behavioral", "leadership", "coding"]:
+                        question["type"] = interview_type
+                    if "difficulty" not in question:
+                        question["difficulty"] = "intermediate"  # Default if not specified
+                    # Add batch index to ID to ensure uniqueness
+                    if "id" not in question:
+                        question["id"] = f"batch{batch_index}_q{batch_questions.index(question)}"
+                    else:
+                        question["id"] = f"batch{batch_index}_{question['id']}"
+                
+                # Update progress tracking if we have a progress_id
+                if progress_id and progress_id in question_progress:
+                    current_questions = question_progress[progress_id]["questions"]
+                    current_questions.extend(batch_questions)
+                    question_progress[progress_id]["questions"] = current_questions
+                    question_progress[progress_id]["generated"] = len(current_questions)
+                    question_progress[progress_id]["timestamp"] = time.time()
+                
+                return batch_questions
             
-            response = AIService.client.chat.completions.create(
-                model=AIService.model,
-                temperature=0.9,  # Increase temperature for more randomness
-                messages=[
-                    {"role": "system", "content": f"You are an expert {interview_type} interviewer. Generate relevant and diverse {interview_type} interview questions based on the provided job details and seniority level ({seniority_level}). Avoid repetitive patterns and ensure each set of questions is unique. ONLY generate questions of the specified interview type with appropriate difficulty for the seniority level."},
-                    {"role": "user", "content": context}
-                ],
-                timeout=timeout_override  # Override the default timeout
-            )
-
-            # Parse the response
-            questions_text = response.choices[0].message.content
+            # Generate first batch
+            all_questions = generate_batch(0, batch_size)
             
-            # Clean up the response to ensure it's valid JSON
-            # Remove markdown code blocks if present
-            if "```json" in questions_text:
-                questions_text = questions_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in questions_text:
-                questions_text = questions_text.split("```")[1].split("```")[0].strip()
+            # Use ThreadPoolExecutor for parallel processing of remaining batches
+            if num_batches > 1:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, num_batches-1)) as executor:
+                    future_to_batch = {
+                        executor.submit(
+                            generate_batch, i, batch_size, all_questions
+                        ): i for i in range(1, num_batches)
+                    }
+                    
+                    for future in concurrent.futures.as_completed(future_to_batch):
+                        batch_index = future_to_batch[future]
+                        try:
+                            batch_questions = future.result()
+                            all_questions.extend(batch_questions)
+                        except Exception as e:
+                            logger.error(f"Error generating batch {batch_index}: {str(e)}")
             
-            # Handle case where response might be an array or individual objects
-            if questions_text.startswith("[") and questions_text.endswith("]"):
-                questions = json.loads(questions_text)
-            else:
-                # If not properly formatted as an array, try to parse individual objects
-                questions_text = questions_text.strip().strip(',')
-                questions = json.loads(f"[{questions_text}]")
-
-            # Ensure all questions have the correct type and add seniority level
-            for question in questions:
-                if "type" not in question or not question["type"] in ["technical", "behavioral", "leadership", "coding"]:
-                    question["type"] = interview_type
-                if "difficulty" not in question:
-                    question["difficulty"] = "intermediate"  # Default if not specified
-
-            # Generate a unique interview ID
-            interview_id = str(uuid.uuid4())
+            # Ensure we have exactly the right number of questions
+            if len(all_questions) > num_questions:
+                all_questions = all_questions[:num_questions]
             
-            logger.info(f"Generated {len(questions)} {interview_type} questions for interview {interview_id} at {seniority_level} level")
-            return {
+            # Ensure each question has a unique ID
+            for i, question in enumerate(all_questions):
+                question["id"] = f"q{i+1}"
+            
+            result = {
                 "interview_id": interview_id,
-                "questions": questions,
+                "questions": all_questions,
                 "seniority_level": seniority_level
             }
+            
+            # Cache the result if no CV was provided
+            if not cv_text:
+                cache_key = AIService._generate_cache_key(job_title, job_description, interview_type, duration)
+                question_cache[cache_key] = {
+                    'data': result,
+                    'timestamp': asyncio.get_event_loop().time()
+                }
+            
+            logger.info(f"Generated {len(all_questions)} {interview_type} questions for interview {interview_id} at {seniority_level} level")
+            return result
 
         except Exception as e:
             logger.error(f"Error generating interview questions: {str(e)}")

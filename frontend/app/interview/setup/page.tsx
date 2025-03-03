@@ -20,6 +20,11 @@ export default function InterviewSetup() {
   const [useVideoMode, setUseVideoMode] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
+  // Add states for progressive loading
+  const [progressiveQuestions, setProgressiveQuestions] = useState<any[]>([]);
+  const [progressiveLoading, setProgressiveLoading] = useState(false);
+  const [progressPercent, setProgressPercent] = useState(0);
+  
   // Add debug state
   const [debugInfo, setDebugInfo] = useState<string>('');
 
@@ -34,6 +39,9 @@ export default function InterviewSetup() {
     setIsLoading(true);
     setError('');
     setDebugInfo('Starting interview setup...');
+    setProgressiveQuestions([]);
+    setProgressiveLoading(true);
+    setProgressPercent(0);
 
     // Add a timeout to prevent getting stuck - longer for longer interviews
     const timeoutDuration = duration >= 60 ? 90000 : 45000; // 90 seconds for 60-min interviews, 45 seconds for others
@@ -90,9 +98,52 @@ export default function InterviewSetup() {
         setDebugInfo('CV uploaded successfully');
       }
 
-      // Generate interview
+      // Generate interview with progressive loading
       setDebugInfo('Generating interview questions...');
       console.log('Generating interview questions...');
+      
+      // Start a polling mechanism to check progress
+      const interviewId = `temp_${Date.now()}`;
+      let questionsGenerated = 0;
+      
+      // Set up polling for progressive updates
+      const pollInterval = setInterval(async () => {
+        try {
+          // Check if we already have all questions
+          if (questionsGenerated >= duration) {
+            clearInterval(pollInterval);
+            return;
+          }
+          
+          // Poll for new questions (this is a simulated endpoint - you'd need to implement this on the backend)
+          const pollResponse = await fetch(`${API_BASE_URL}/api/interview/questions/progress?id=${interviewId}`, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            }
+          });
+          
+          if (pollResponse.ok) {
+            const progressData = await pollResponse.json();
+            if (progressData.questions && progressData.questions.length > questionsGenerated) {
+              // Update with new questions
+              setProgressiveQuestions(progressData.questions);
+              questionsGenerated = progressData.questions.length;
+              
+              // Update progress percentage
+              const percent = Math.min(Math.round((questionsGenerated / duration) * 100), 99);
+              setProgressPercent(percent);
+              
+              setDebugInfo(`Generated ${questionsGenerated} of ${duration} questions (${percent}%)`);
+            }
+          }
+        } catch (error) {
+          // Ignore polling errors
+          console.error('Polling error:', error);
+        }
+      }, 2000); // Poll every 2 seconds
+      
+      // Make the actual request to generate all questions
       const interviewResponse = await Promise.race([
         fetch(`${API_BASE_URL}/api/interview/questions`, {
           method: 'POST',
@@ -110,6 +161,9 @@ export default function InterviewSetup() {
         timeoutPromise
       ]) as Response;
 
+      // Clear the polling interval once we have the full response
+      clearInterval(pollInterval);
+
       if (!interviewResponse.ok) {
         const errorData = await interviewResponse.json();
         throw new Error(errorData.detail || 'Failed to generate interview');
@@ -119,6 +173,10 @@ export default function InterviewSetup() {
       const interviewData = await interviewResponse.json();
       console.log('Interview data received:', interviewData.interview_id);
       setDebugInfo(`Interview data received: ${interviewData.interview_id}`);
+      
+      // Update progress to 100%
+      setProgressPercent(100);
+      setProgressiveQuestions(interviewData.questions);
       
       // Store interview data in localStorage for now (in a real app, this would be in a database)
       localStorage.setItem('currentInterview', JSON.stringify({
@@ -144,6 +202,7 @@ export default function InterviewSetup() {
       setError(err instanceof Error ? err.message : 'An unexpected error occurred');
     } finally {
       setIsLoading(false);
+      setProgressiveLoading(false);
     }
   };
 
@@ -251,11 +310,14 @@ export default function InterviewSetup() {
                 onChange={(e) => setDuration(parseInt(e.target.value))}
                 className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
               >
-                <option value="5">5 minutes</option>
-                <option value="15">15 minutes</option>
-                <option value="30">30 minutes</option>
-                <option value="60">60 minutes</option>
+                <option value="5">5 minutes (5 questions)</option>
+                <option value="15">15 minutes (15 questions)</option>
+                <option value="30">30 minutes (30 questions)</option>
+                <option value="60">60 minutes (60 questions)</option>
               </select>
+              <p className="mt-1 text-xs text-gray-500">
+                The interview will generate 1 question per minute of duration.
+              </p>
             </div>
           </div>
           
@@ -345,10 +407,37 @@ export default function InterviewSetup() {
             </button>
           </div>
           
-          {isLoading && debugInfo && (
+          {isLoading && (
             <div className="mt-4 p-3 bg-gray-100 rounded-md text-sm text-gray-700">
               <p className="font-medium">Setup Progress:</p>
               <p>{debugInfo}</p>
+              
+              {progressiveLoading && (
+                <div className="mt-3">
+                  <div className="w-full bg-gray-200 rounded-full h-2.5 mb-2">
+                    <div className="bg-indigo-600 h-2.5 rounded-full" style={{ width: `${progressPercent}%` }}></div>
+                  </div>
+                  <p className="text-xs text-gray-500">Generating questions: {progressPercent}% complete</p>
+                  
+                  {progressiveQuestions.length > 0 && (
+                    <div className="mt-3">
+                      <p className="font-medium text-sm">Questions generated so far:</p>
+                      <div className="mt-2 max-h-40 overflow-y-auto text-xs">
+                        {progressiveQuestions.slice(0, 5).map((q, i) => (
+                          <div key={i} className="mb-1 pb-1 border-b border-gray-100">
+                            {i+1}. {q.question.substring(0, 100)}{q.question.length > 100 ? '...' : ''}
+                          </div>
+                        ))}
+                        {progressiveQuestions.length > 5 && (
+                          <p className="text-gray-500 italic">
+                            +{progressiveQuestions.length - 5} more questions...
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </form>
