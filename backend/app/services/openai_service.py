@@ -262,7 +262,9 @@ class OpenAIService:
         try:
             logger.info(f"Calling OpenAI API with model: {self.model}")
             
-            response = await self.client.chat.completions.create(
+            # The OpenAI client methods are not async by default in the latest version
+            # So we don't use await here
+            response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 temperature=self.temperature,
