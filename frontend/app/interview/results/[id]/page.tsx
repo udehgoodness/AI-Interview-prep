@@ -62,15 +62,20 @@ export default function InterviewResults({ params }: { params: { id: string } })
         // Ensure all required fields exist with default values if missing
         const completeData = {
           ...parsedData,
-          score: parsedData.score || 0,
+          interviewId: parsedData.interviewId || params.id,
+          jobTitle: parsedData.jobTitle || 'Interview',
+          interviewType: parsedData.interviewType || 'technical',
+          score: parsedData.score !== undefined ? parsedData.score : 70,
           feedback: parsedData.feedback || "Thank you for completing the interview. Your responses have been recorded.",
-          strengths: Array.isArray(parsedData.strengths) && parsedData.strengths.length > 0 
-            ? parsedData.strengths 
-            : [
-                "Technical knowledge and understanding of core concepts",
-                "Clear communication of ideas",
-                "Structured approach to problem-solving"
-              ],
+          strengths: parsedData.score === 0 
+            ? [] // Empty strengths for zero score
+            : (Array.isArray(parsedData.strengths) && parsedData.strengths.length > 0 
+              ? parsedData.strengths 
+              : [
+                  "Technical knowledge and understanding of core concepts",
+                  "Clear communication of ideas",
+                  "Structured approach to problem-solving"
+                ]),
           weaknesses: Array.isArray(parsedData.weaknesses) && parsedData.weaknesses.length > 0 
             ? parsedData.weaknesses 
             : [
@@ -110,15 +115,20 @@ export default function InterviewResults({ params }: { params: { id: string } })
             // Ensure all required fields exist with default values if missing
             const completeData = {
               ...parsedData,
-              score: parsedData.score || 0,
+              interviewId: parsedData.interviewId || params.id,
+              jobTitle: parsedData.jobTitle || 'Interview',
+              interviewType: parsedData.interviewType || 'technical',
+              score: parsedData.score !== undefined ? parsedData.score : 70,
               feedback: parsedData.feedback || "Thank you for completing the interview. Your responses have been recorded.",
-              strengths: Array.isArray(parsedData.strengths) && parsedData.strengths.length > 0 
-                ? parsedData.strengths 
-                : [
-                    "Technical knowledge and understanding of core concepts",
-                    "Clear communication of ideas",
-                    "Structured approach to problem-solving"
-                  ],
+              strengths: parsedData.score === 0 
+                ? [] // Empty strengths for zero score
+                : (Array.isArray(parsedData.strengths) && parsedData.strengths.length > 0 
+                  ? parsedData.strengths 
+                  : [
+                      "Technical knowledge and understanding of core concepts",
+                      "Clear communication of ideas",
+                      "Structured approach to problem-solving"
+                    ]),
               weaknesses: Array.isArray(parsedData.weaknesses) && parsedData.weaknesses.length > 0 
                 ? parsedData.weaknesses 
                 : [
@@ -258,11 +268,15 @@ export default function InterviewResults({ params }: { params: { id: string } })
                 ))}
               </ul>
             ) : (
-              <ul className="list-disc pl-5 space-y-2">
-                <li className="text-gray-700">Technical knowledge and understanding of core concepts</li>
-                <li className="text-gray-700">Clear communication of ideas</li>
-                <li className="text-gray-700">Structured approach to problem-solving</li>
-              </ul>
+              evaluationData.score === 0 ? (
+                <p className="text-gray-700">No strengths identified due to lack of responses.</p>
+              ) : (
+                <ul className="list-disc pl-5 space-y-2">
+                  <li className="text-gray-700">Technical knowledge and understanding of core concepts</li>
+                  <li className="text-gray-700">Clear communication of ideas</li>
+                  <li className="text-gray-700">Structured approach to problem-solving</li>
+                </ul>
+              )
             )}
           </div>
           <div>
