@@ -27,7 +27,7 @@ from typing import Optional, List, Dict, Any
 
 # Import directly from the files
 from app.ai_service import AIService, question_cache, set_question_progress, update_question_progress
-from app.utils import extract_text_from_cv
+from app.utils.file import extract_text_from_cv
 
 # Import our new modules
 from services.auth_service import get_current_active_user
