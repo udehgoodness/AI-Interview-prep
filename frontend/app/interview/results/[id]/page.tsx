@@ -63,12 +63,12 @@ export default function InterviewResults({ params }: { params: { id: string } })
         const completeData = {
           ...parsedData,
           interviewId: parsedData.interviewId || params.id,
-          jobTitle: parsedData.jobTitle || 'Interview',
-          interviewType: parsedData.interviewType || 'technical',
+          jobTitle: parsedData.jobTitle || "Software Engineer",
+          interviewType: parsedData.interviewType || "technical",
           score: parsedData.score !== undefined ? parsedData.score : 70,
           feedback: parsedData.feedback || "Thank you for completing the interview. Your responses have been recorded.",
           strengths: parsedData.score === 0 
-            ? [] // Empty strengths for zero score
+            ? [] // Empty array for strengths when score is 0
             : (Array.isArray(parsedData.strengths) && parsedData.strengths.length > 0 
               ? parsedData.strengths 
               : [
@@ -116,12 +116,12 @@ export default function InterviewResults({ params }: { params: { id: string } })
             const completeData = {
               ...parsedData,
               interviewId: parsedData.interviewId || params.id,
-              jobTitle: parsedData.jobTitle || 'Interview',
-              interviewType: parsedData.interviewType || 'technical',
+              jobTitle: parsedData.jobTitle || "Software Engineer",
+              interviewType: parsedData.interviewType || "technical",
               score: parsedData.score !== undefined ? parsedData.score : 70,
               feedback: parsedData.feedback || "Thank you for completing the interview. Your responses have been recorded.",
               strengths: parsedData.score === 0 
-                ? [] // Empty strengths for zero score
+                ? [] // Empty array for strengths when score is 0
                 : (Array.isArray(parsedData.strengths) && parsedData.strengths.length > 0 
                   ? parsedData.strengths 
                   : [
@@ -268,15 +268,7 @@ export default function InterviewResults({ params }: { params: { id: string } })
                 ))}
               </ul>
             ) : (
-              evaluationData.score === 0 ? (
-                <p className="text-gray-700">No strengths identified due to lack of responses.</p>
-              ) : (
-                <ul className="list-disc pl-5 space-y-2">
-                  <li className="text-gray-700">Technical knowledge and understanding of core concepts</li>
-                  <li className="text-gray-700">Clear communication of ideas</li>
-                  <li className="text-gray-700">Structured approach to problem-solving</li>
-                </ul>
-              )
+              <p className="text-gray-700 italic">No strengths identified.</p>
             )}
           </div>
           <div>
@@ -288,11 +280,7 @@ export default function InterviewResults({ params }: { params: { id: string } })
                 ))}
               </ul>
             ) : (
-              <ul className="list-disc pl-5 space-y-2">
-                <li className="text-gray-700">Could provide more detailed examples from past experience</li>
-                <li className="text-gray-700">Some technical explanations could be more comprehensive</li>
-                <li className="text-gray-700">Consider addressing edge cases in your solutions</li>
-              </ul>
+              <p className="text-gray-700 italic">No improvement areas identified.</p>
             )}
           </div>
         </div>
@@ -307,12 +295,7 @@ export default function InterviewResults({ params }: { params: { id: string } })
               ))}
             </ul>
           ) : (
-            <ul className="list-disc pl-5 space-y-2">
-              <li className="text-gray-700">Practice explaining complex technical concepts with concrete examples</li>
-              <li className="text-gray-700">Develop a framework for answering behavioral questions with the STAR method</li>
-              <li className="text-gray-700">Expand knowledge in specific technical areas mentioned in the job description</li>
-              <li className="text-gray-700">Prepare more detailed examples of past projects and challenges</li>
-            </ul>
+            <p className="text-gray-700 italic">No recommendations available.</p>
           )}
         </div>
         
