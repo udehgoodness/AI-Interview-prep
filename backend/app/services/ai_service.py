@@ -5,6 +5,28 @@ from .deepseek_service import DeepSeekService
 
 logger = logging.getLogger(__name__)
 
+# Simple in-memory cache for interview questions
+question_cache = {}
+
+# Question progress tracking
+question_progress = {}
+
+def set_question_progress(progress_dict):
+    """Set the question_progress reference"""
+    global question_progress
+    question_progress = progress_dict
+
+def update_question_progress(interview_id, progress, status="generating"):
+    """Update the progress for a specific interview"""
+    if interview_id in question_progress:
+        question_progress[interview_id]["progress"] = progress
+        question_progress[interview_id]["status"] = status
+    else:
+        question_progress[interview_id] = {
+            "progress": progress,
+            "status": status
+        }
+
 class AIService:
     def __init__(self):
         self.openai_service = OpenAIService()
@@ -29,24 +51,57 @@ class AIService:
             
             # If model is explicitly set to deepseek, use DeepSeek directly
             if model.lower() == "deepseek":
-                questions = await self.deepseek_service.generate_interview_questions(job_title, job_description, cv_text)
+                questions = await self.deepseek_service.generate_interview_questions(
+                    job_title, 
+                    job_description, 
+                    cv_text,
+                    interview_type,
+                    duration
+                )
                 if questions:
                     logger.info("Successfully generated questions using DeepSeek")
+                    
+                    # Cache the questions if progress_id is provided
+                    if progress_id:
+                        question_cache[progress_id] = {"questions": questions}
+                    
                     return {"questions": questions, "model_used": "deepseek"}
                 logger.error("Failed to generate questions with DeepSeek")
                 return None
             
             # Otherwise, try OpenAI first
-            questions = await self.openai_service.generate_interview_questions(job_title, job_description, cv_text)
+            questions = await self.openai_service.generate_interview_questions(
+                job_title, 
+                job_description, 
+                cv_text,
+                interview_type,
+                duration
+            )
             if questions:
                 logger.info("Successfully generated questions using OpenAI")
+                
+                # Cache the questions if progress_id is provided
+                if progress_id:
+                    question_cache[progress_id] = {"questions": questions}
+                
                 return {"questions": questions, "model_used": "openai"}
             
             # If OpenAI fails, fall back to DeepSeek
             logger.warning("OpenAI failed to generate questions, falling back to DeepSeek")
-            questions = await self.deepseek_service.generate_interview_questions(job_title, job_description, cv_text)
+            questions = await self.deepseek_service.generate_interview_questions(
+                job_title, 
+                job_description, 
+                cv_text,
+                interview_type,
+                duration
+            )
             if questions:
                 logger.info("Successfully generated questions using DeepSeek fallback")
+                
+                # Cache the questions if progress_id is provided
+                if progress_id:
+                    question_cache[progress_id] = {"questions": questions}
+                
                 return {"questions": questions, "model_used": "deepseek"}
             
             logger.error("Both OpenAI and DeepSeek failed to generate questions")

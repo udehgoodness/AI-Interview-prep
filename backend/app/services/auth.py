@@ -17,7 +17,7 @@ from jose.utils import base64url_decode
 import json
 import requests
 
-from app.database.db import execute_query
+from app.database.db import execute_query, get_db_connection
 from app.models.user import UserCreate, UserResponse, Auth0Profile
 from app.services.subscription import get_user_subscription, get_subscription_plan_by_id
 
@@ -56,12 +56,47 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     return encoded_jwt
 
 def verify_password(plain_password, hashed_password):
-    """Verify a password against a hash"""
-    return pwd_context.verify(plain_password, hashed_password)
+    """
+    Verify a password against a hash
+    
+    This function handles various edge cases:
+    - Malformed hashes (not starting with $2b$)
+    - Empty or None passwords
+    - Exceptions during verification
+    """
+    if not plain_password or not hashed_password:
+        logger.error("Empty password or hash provided")
+        return False
+        
+    try:
+        # Check if the hash is properly formatted
+        if not isinstance(hashed_password, str) or not hashed_password.startswith('$2b$'):
+            logger.warning(f"Malformed password hash detected: {hashed_password[:10]}...")
+            return False
+            
+        # Verify the password
+        return pwd_context.verify(plain_password, hashed_password)
+    except Exception as e:
+        logger.error(f"Error verifying password: {str(e)}")
+        return False
 
 def get_password_hash(password):
-    """Get password hash"""
-    return pwd_context.hash(password)
+    """
+    Get password hash
+    
+    This function handles various edge cases:
+    - Empty or None passwords
+    - Exceptions during hashing
+    """
+    if not password:
+        logger.error("Empty password provided for hashing")
+        raise ValueError("Password cannot be empty")
+        
+    try:
+        return pwd_context.hash(password)
+    except Exception as e:
+        logger.error(f"Error hashing password: {str(e)}")
+        raise
 
 # User authentication functions
 def get_user_by_email(email: str):
@@ -75,16 +110,50 @@ def get_user_by_email(email: str):
     return None
 
 def authenticate_user(email: str, password: str):
-    """Authenticate a user"""
-    user = get_user_by_email(email)
+    """
+    Authenticate a user with email and password
     
-    if not user:
+    This function handles various edge cases:
+    - Empty or None email/password
+    - User not found
+    - Invalid password
+    - Exceptions during authentication
+    """
+    if not email or not password:
+        logger.error("Empty email or password provided for authentication")
         return False
-    
-    if not verify_password(password, user["password"]):
+        
+    try:
+        # Get the user by email
+        user = get_user_by_email(email)
+        
+        if not user:
+            logger.warning(f"Authentication failed: User with email {email} not found")
+            return False
+        
+        # Verify the password
+        if not verify_password(password, user["password_hash"]):
+            logger.warning(f"Authentication failed: Invalid password for user {email}")
+            return False
+        
+        # Update last login timestamp
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE users SET last_login = %s WHERE id = %s",
+                (datetime.utcnow(), user["id"])
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error(f"Error updating last login timestamp: {str(e)}")
+            # Continue with authentication even if updating timestamp fails
+        
+        return user
+    except Exception as e:
+        logger.error(f"Error during authentication: {str(e)}")
         return False
-    
-    return user
 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
     """Get the current user from the JWT token"""

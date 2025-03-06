@@ -23,6 +23,36 @@ logger = logging.getLogger(__name__)
 # Create router
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
+@router.post("/login", response_model=Dict[str, Any])
+async def login(user_data: UserLogin):
+    """
+    Login with email and password
+    """
+    user = authenticate_user(user_data.email, user_data.password)
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    if not user.get("is_active", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Inactive user"
+        )
+    
+    # Create access token
+    access_token = create_access_token(data={"sub": user["email"]})
+    
+    # Return token and user data
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": user
+    }
+
 @router.post("/token")
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
     """

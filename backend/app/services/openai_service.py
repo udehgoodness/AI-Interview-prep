@@ -14,16 +14,25 @@ class OpenAIService:
         self.temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.7"))
         self.client = OpenAI(api_key=self.api_key, timeout=60.0)
 
-    async def generate_interview_questions(self, job_title: str, job_description: str, cv_text: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+    async def generate_interview_questions(self, job_title: str, job_description: str, cv_text: Optional[str] = None, interview_type: str = "general", duration: int = 30) -> Optional[List[Dict[str, Any]]]:
         """
         Generate interview questions using OpenAI
+        
+        The number of questions will scale with the interview duration:
+        - 1 question per minute of interview time
         """
         try:
-            prompt = f"""Generate 4 technical interview questions for a {job_title} position.
+            # Calculate number of questions based on duration (1 question per minute)
+            num_questions = duration
+            
+            prompt = f"""Generate {num_questions} technical interview questions for a {job_title} position.
             
             Job Description: {job_description}
             
             {f'CV/Resume: {cv_text}' if cv_text else ''}
+            
+            Interview Type: {interview_type}
+            Interview Duration: {duration} minutes
             
             Return the questions in the following JSON format:
             [
@@ -37,7 +46,7 @@ class OpenAIService:
                 ...
             ]
             
-            Make the questions challenging and relevant to the position.
+            Ensure you generate exactly {num_questions} questions to match the {duration}-minute interview duration.
             """
 
             messages = [{"role": "user", "content": prompt}]

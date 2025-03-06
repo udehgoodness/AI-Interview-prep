@@ -14,7 +14,7 @@ from app.models.conversation import (
 )
 from app.services.auth import get_current_active_user
 from app.services.subscription import check_user_subscription_access
-from app.services.ai import AIService
+from app.services.ai_service import AIService
 
 # Configure logging
 logger = logging.getLogger(__name__)

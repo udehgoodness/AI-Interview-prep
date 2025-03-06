@@ -57,7 +57,7 @@ def create_app():
         """
         try:
             # Initialize database
-            from app.database.init_db import init_database
+            from database.init_db import init_database
             init_database()
             
             # Update subscription plan features

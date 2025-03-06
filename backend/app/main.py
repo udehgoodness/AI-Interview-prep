@@ -26,16 +26,16 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
 # Import directly from the files
-from app.ai_service import AIService, question_cache, set_question_progress, update_question_progress
+from app.services.ai_service import AIService, question_cache, set_question_progress, update_question_progress
 from app.utils.file import extract_text_from_cv
 
 # Import our new modules
-from services.auth_service import get_current_active_user
-from services.subscription_service import check_user_subscription_access
-from routes import auth_routes, subscription_routes
+from app.services.auth_service import get_current_active_user
+from app.services.subscription_service import check_user_subscription_access
+from app.routes import auth_routes, subscription_routes
 
 # Fix the import path for database.db
-from database.db import execute_query
+from app.database.db import execute_query
 
 # Initialize FastAPI app
 app = FastAPI(title="AI Interview Prep API")

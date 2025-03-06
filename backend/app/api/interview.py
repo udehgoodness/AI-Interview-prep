@@ -17,7 +17,7 @@ from app.models.interview import (
 )
 from app.services.auth import get_current_active_user
 from app.services.subscription import check_user_subscription_access
-from app.services.ai import AIService, question_cache, update_question_progress
+from app.services.ai_service import AIService, question_cache, update_question_progress
 from app.utils.file import extract_text_from_cv
 
 # Configure logging
@@ -100,7 +100,7 @@ async def get_question_progress(interview_id: str):
     """
     Get the progress of question generation for an interview
     """
-    from app.services.ai import question_progress
+    from app.services.ai_service import question_progress
     
     if interview_id not in question_progress:
         raise HTTPException(
