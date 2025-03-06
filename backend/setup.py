@@ -1,0 +1,43 @@
+from setuptools import setup, find_packages
+
+setup(
+    name="ai-interview-prep",
+    version="0.1.0",
+    packages=find_packages(),
+    install_requires=[
+        "fastapi==0.109.2",
+        "uvicorn==0.27.1",
+        "python-dotenv==1.0.1",
+        "openai==1.12.0",
+        "psycopg2-binary==2.9.9",
+        "python-jose[cryptography]==3.3.0",
+        "passlib[bcrypt]==1.7.4",
+        "python-multipart==0.0.9",
+        "aiohttp==3.9.3",
+        "requests==2.31.0",
+        "pytest==8.0.2",
+        "pytest-asyncio==0.23.5",
+        "stripe==7.11.0",
+        "alembic==1.12.1",
+        "sqlalchemy==2.0.23",
+        "asyncpg==0.29.0",
+        "httpx==0.25.1",
+        "PyPDF2==3.0.1",
+        "python-docx==1.1.2",
+        "email-validator==2.2.0"
+    ],
+    python_requires=">=3.9",
+    author="AI Interview Prep Team",
+    author_email="info@aiinterviewprep.com",
+    description="AI-powered interview preparation platform",
+    keywords="interview, ai, preparation, career",
+    classifiers=[
+        "Development Status :: 4 - Beta",
+        "Intended Audience :: End Users/Desktop",
+        "License :: OSI Approved :: MIT License",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+    ],
+) 
