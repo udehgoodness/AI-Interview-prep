@@ -4,9 +4,20 @@ Script to reseed the subscription plans in the database.
 This will delete all existing plans and create new ones based on the frontend definitions.
 """
 
+import os
+import sys
 import json
 from decimal import Decimal
-from database.db import execute_query
+from dotenv import load_dotenv
+
+# Update import to use app structure
+from app.database.db import execute_query
+
+# Add the parent directory to the path to allow imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Load environment variables
+load_dotenv()
 
 def main():
     # Delete existing plans

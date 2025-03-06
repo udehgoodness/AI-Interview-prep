@@ -1,13 +1,26 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Body, Request
-from fastapi.security import OAuth2PasswordRequestForm
-from typing import Dict, Any, Optional
-from datetime import timedelta
-import json
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, Cookie
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from typing import Optional, Dict, Any
+from datetime import datetime, timedelta
+import logging
+
+# Update imports to use app structure
+from app.services.auth import (
+    create_access_token,
+    verify_password,
+    get_password_hash,
+    get_user_by_email,
+    authenticate_user,
+    get_current_active_user,
+    get_current_admin_user,
+    create_user,
+    update_user,
+    delete_user,
+    get_user_by_id
+)
 
 from models.user import UserCreate, UserResponse, UserLogin, UserUpdate, Auth0Profile
 from services.auth_service import (
-    authenticate_user, create_user, create_access_token, 
-    get_current_active_user, get_current_admin_user,
     ACCESS_TOKEN_EXPIRE_MINUTES, create_or_update_auth0_user
 )
 
@@ -151,7 +164,6 @@ async def update_user_me(
         params.append(user_update.email)
         
     if user_update.password is not None:
-        from services.auth_service import get_password_hash
         hashed_password = get_password_hash(user_update.password)
         update_fields.append("password_hash = %s")
         params.append(hashed_password)
@@ -164,7 +176,7 @@ async def update_user_me(
         return current_user
     
     # Build and execute the query
-    from database.db import execute_query
+    from app.database.db import execute_query
     query = f"UPDATE users SET {', '.join(update_fields)} WHERE id = %s RETURNING *"
     params.append(current_user["id"])
     
@@ -187,11 +199,23 @@ async def get_users(
     """
     Get all users (admin only)
     """
-    from database.db import execute_query
-    query = "SELECT * FROM users ORDER BY id LIMIT %s OFFSET %s"
-    results = execute_query(query, (limit, skip))
-    
-    return results
+    try:
+        # Update import to use app structure
+        from app.database.db import execute_query
+        
+        users = execute_query(
+            """
+            SELECT id, email, full_name, is_active, is_admin, created_at, updated_at, 
+            last_login, subscription_type
+            FROM users
+            ORDER BY id
+            LIMIT %s OFFSET %s
+            """,
+            (limit, skip)
+        )
+        return users
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error retrieving users: {str(e)}")
 
 @router.get("/users/{user_id}", response_model=Dict[str, Any])
 async def get_user(
@@ -201,17 +225,28 @@ async def get_user(
     """
     Get a specific user by ID (admin only)
     """
-    from database.db import execute_query
-    query = "SELECT * FROM users WHERE id = %s"
-    results = execute_query(query, (user_id,))
-    
-    if results and len(results) > 0:
-        return dict(results[0])
-    
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail="User not found"
-    )
+    try:
+        # Update import to use app structure
+        from app.database.db import execute_query
+        
+        users = execute_query(
+            """
+            SELECT id, email, full_name, is_active, is_admin, created_at, updated_at, 
+            last_login, subscription_type
+            FROM users
+            WHERE id = %s
+            """,
+            (user_id,)
+        )
+        
+        if not users:
+            raise HTTPException(status_code=404, detail="User not found")
+            
+        return users[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error retrieving user: {str(e)}")
 
 @router.put("/users/{user_id}", response_model=Dict[str, Any])
 async def update_user(
@@ -222,49 +257,62 @@ async def update_user(
     """
     Update a specific user (admin only)
     """
-    # Build the update query dynamically based on provided fields
-    update_fields = []
-    params = []
-    
-    if user_update.full_name is not None:
-        update_fields.append("full_name = %s")
-        params.append(user_update.full_name)
+    try:
+        # Update import to use app structure
+        from app.database.db import execute_query
         
-    if user_update.email is not None:
-        update_fields.append("email = %s")
-        params.append(user_update.email)
-        
-    if user_update.password is not None:
-        from services.auth_service import get_password_hash
-        hashed_password = get_password_hash(user_update.password)
-        update_fields.append("password_hash = %s")
-        params.append(hashed_password)
-        
-    if user_update.is_active is not None:
-        update_fields.append("is_active = %s")
-        params.append(user_update.is_active)
-    
-    # Add updated_at timestamp
-    update_fields.append("updated_at = NOW()")
-    
-    # If no fields to update, return error
-    if not update_fields:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No fields to update"
+        # Check if user exists
+        users = execute_query(
+            "SELECT id FROM users WHERE id = %s",
+            (user_id,)
         )
-    
-    # Build and execute the query
-    from database.db import execute_query
-    query = f"UPDATE users SET {', '.join(update_fields)} WHERE id = %s RETURNING *"
-    params.append(user_id)
-    
-    results = execute_query(query, tuple(params))
-    
-    if results and len(results) > 0:
-        return dict(results[0])
-    
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail="User not found"
-    ) 
+        
+        if not users:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Build the update query dynamically based on provided fields
+        update_fields = []
+        params = []
+        
+        if user_update.full_name is not None:
+            update_fields.append("full_name = %s")
+            params.append(user_update.full_name)
+            
+        if user_update.email is not None:
+            update_fields.append("email = %s")
+            params.append(user_update.email)
+            
+        if user_update.password is not None:
+            hashed_password = get_password_hash(user_update.password)
+            update_fields.append("password_hash = %s")
+            params.append(hashed_password)
+            
+        if user_update.is_active is not None:
+            update_fields.append("is_active = %s")
+            params.append(user_update.is_active)
+        
+        # Add updated_at timestamp
+        update_fields.append("updated_at = NOW()")
+        
+        # If no fields to update, return error
+        if not update_fields:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No fields to update"
+            )
+        
+        # Build and execute the query
+        query = f"UPDATE users SET {', '.join(update_fields)} WHERE id = %s RETURNING *"
+        params.append(user_id)
+        
+        results = execute_query(query, tuple(params))
+        
+        if results and len(results) > 0:
+            return dict(results[0])
+        
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error updating user: {str(e)}") 

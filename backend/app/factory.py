@@ -55,16 +55,18 @@ def create_app():
         """
         Initialize database on startup
         """
-        try:
-            # Initialize database
-            from database.init_db import init_database
-            init_database()
-            
-            # Update subscription plan features
-            from app.services.subscription import update_subscription_plan_features
-            update_subscription_plan_features()
-            
-        except Exception as e:
-            logger.error(f"Error initializing database: {str(e)}")
+        # Initialize database if needed
+        if os.getenv("INITIALIZE_DB", "False").lower() == "true":
+            try:
+                logger.info("Initializing database...")
+                from app.database.init_db import init_database
+                init_database()
+                
+                # Update subscription plan features
+                from app.services.subscription import update_subscription_plan_features
+                update_subscription_plan_features()
+                
+            except Exception as e:
+                logger.error(f"Error initializing database: {str(e)}")
 
     return app 

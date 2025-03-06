@@ -30,9 +30,9 @@ from app.services.ai_service import AIService, question_cache, set_question_prog
 from app.utils.file import extract_text_from_cv
 
 # Import our new modules
-from app.services.auth_service import get_current_active_user
-from app.services.subscription_service import check_user_subscription_access
-from app.routes import auth_routes, subscription_routes
+from app.services.auth import get_current_active_user
+from app.services.subscription import check_user_subscription_access
+from app.api import auth as auth_routes, subscription as subscription_routes
 
 # Fix the import path for database.db
 from app.database.db import execute_query
@@ -458,7 +458,7 @@ async def startup_event():
     """
     try:
         # Initialize database
-        from database.init_db import init_database
+        from app.database.init_db import init_database
         init_database()
         
         # Update subscription plan features

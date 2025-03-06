@@ -1,18 +1,19 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Body, Request, Header
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+import logging
 
 from models.subscription import (
     SubscriptionPlanCreate, SubscriptionPlanResponse, SubscriptionPlanUpdate,
     UserSubscriptionCreate, UserSubscriptionResponse, UserSubscriptionUpdate,
     PaymentHistoryCreate, PaymentHistoryResponse, StripeWebhookEvent
 )
-from services.auth_service import get_current_active_user, get_current_admin_user
-from services.subscription_service import (
+from app.services.auth import get_current_active_user, get_current_admin_user
+from app.services.subscription import (
     get_all_subscription_plans, get_subscription_plan_by_id, create_subscription_plan, update_subscription_plan,
-    get_user_subscription, get_user_subscription_by_id, create_user_subscription, update_user_subscription,
-    cancel_user_subscription, create_payment_record, get_user_payment_history,
-    create_checkout_session, handle_stripe_webhook, check_user_subscription_access
+    delete_subscription_plan, get_user_subscription, get_user_subscription_by_id, create_user_subscription,
+    update_user_subscription, cancel_user_subscription, create_stripe_checkout_session,
+    handle_stripe_webhook_event, get_user_payment_history, create_checkout_session
 )
 
 router = APIRouter(prefix="/api/subscriptions", tags=["subscriptions"])
@@ -156,7 +157,7 @@ async def stripe_webhook(
     payload = await request.body()
     
     # Handle the webhook
-    result = handle_stripe_webhook(payload, stripe_signature)
+    result = handle_stripe_webhook_event(payload, stripe_signature)
     return result
 
 @router.get("/access/{feature}", response_model=Dict[str, Any])

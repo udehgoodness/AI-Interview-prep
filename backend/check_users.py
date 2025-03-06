@@ -3,7 +3,18 @@
 Script to check users in the database
 """
 
-from database.db import execute_query
+import os
+import sys
+from dotenv import load_dotenv
+
+# Update import to use app structure
+from app.database.db import execute_query
+
+# Add the parent directory to the path to allow imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Load environment variables
+load_dotenv()
 
 def main():
     print("Users in database:")
