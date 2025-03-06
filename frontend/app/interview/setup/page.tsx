@@ -1,23 +1,62 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useAuth } from '../../../lib/auth-context';
+import axios from 'axios';
 
 // Add API base URL configuration
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
+// Define plan feature restrictions
+const planFeatures = {
+  Free: {
+    interview_duration_max: 15,
+    voiceMode: false,
+    videoMode: false,
+    codeChallenge: false,
+    maxInterviews: 3,
+    feedbackDetail: 'basic'
+  },
+  Basic: {
+    interview_duration_max: 30,
+    voiceMode: true,
+    videoMode: false,
+    codeChallenge: true,
+    maxInterviews: 10,
+    feedbackDetail: 'detailed'
+  },
+  Professional: {
+    interview_duration_max: 60,
+    voiceMode: true,
+    videoMode: true,
+    codeChallenge: true,
+    maxInterviews: -1, // unlimited
+    feedbackDetail: 'comprehensive'
+  },
+  Enterprise: {
+    interview_duration_max: 120,
+    voiceMode: true,
+    videoMode: true,
+    codeChallenge: true,
+    maxInterviews: -1, // unlimited
+    feedbackDetail: 'comprehensive'
+  }
+};
+
 export default function InterviewSetup() {
   const router = useRouter();
+  const { user, isAuthenticated, isLoading, getAccessToken } = useAuth();
   const [jobTitle, setJobTitle] = useState('');
   const [jobDescription, setJobDescription] = useState('');
   const [interviewType, setInterviewType] = useState('general');
-  const [duration, setDuration] = useState(30);
+  const [duration, setDuration] = useState(15);
   const [cvFile, setCvFile] = useState<File | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [useVoiceMode, setUseVoiceMode] = useState(false);
-  const [useVideoMode, setUseVideoMode] = useState(true);
+  const [useVideoMode, setUseVideoMode] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   // Add states for progressive loading
@@ -25,8 +64,80 @@ export default function InterviewSetup() {
   const [progressiveLoading, setProgressiveLoading] = useState(false);
   const [progressPercent, setProgressPercent] = useState(0);
   
-  // Add debug state
-  const [debugInfo, setDebugInfo] = useState<string>('');
+  // Get user's plan
+  const [userPlan, setUserPlan] = useState('Free');
+  const [availableDurations, setAvailableDurations] = useState<number[]>([5, 15]);
+  const [planFeatureSettings, setPlanFeatureSettings] = useState(planFeatures.Free);
+  const [selectedDuration, setSelectedDuration] = useState<string>("15");
+
+  // Clear previous interview evaluation data when setting up a new interview
+  useEffect(() => {
+    // Clear the latest interview evaluation ID
+    const latestEvaluationId = localStorage.getItem('latestInterviewEvaluation');
+    
+    if (latestEvaluationId) {
+      // Remove the evaluation data for the latest interview
+      localStorage.removeItem(`interviewEvaluation_${latestEvaluationId}`);
+      localStorage.removeItem('latestInterviewEvaluation');
+    }
+    
+    // For backward compatibility, also remove the old format
+    localStorage.removeItem('interviewEvaluation');
+    
+    console.log('Cleared previous interview evaluation data');
+  }, []);
+
+  // Check authentication status and get user's plan
+  useEffect(() => {
+    if (!isLoading) {
+      if (!isAuthenticated) {
+        router.push('/auth/login?redirect=/interview/setup');
+      } else if (user) {
+        // Set user's plan
+        const planName = user.subscription?.plan?.name || 'Free';
+        setUserPlan(planName);
+        
+        // Set plan feature settings
+        const features = planFeatures[planName as keyof typeof planFeatures] || planFeatures.Free;
+        setPlanFeatureSettings(features);
+        
+        // Set available durations based on plan
+        const maxDuration = features.interview_duration_max || 15;
+        const durations = [5, 15];
+        if (maxDuration >= 30) durations.push(30);
+        if (maxDuration >= 60) durations.push(60);
+        if (maxDuration >= 120) durations.push(120);
+        setAvailableDurations(durations);
+        
+        // Set default duration to 15 minutes or the lowest available
+        const initialDuration = durations.includes(15) ? 15 : durations[0];
+        setDuration(initialDuration);
+        setSelectedDuration(initialDuration.toString());
+        console.log('Setting initial duration to:', initialDuration);
+        console.log('Available durations:', durations);
+      }
+    }
+  }, [isLoading, isAuthenticated, router, user]);
+
+  // Handle voice mode toggle
+  const handleVoiceModeToggle = () => {
+    setUseVoiceMode(!useVoiceMode);
+  };
+
+  // Handle video mode toggle
+  const handleVideoModeToggle = () => {
+    setUseVideoMode(!useVideoMode);
+  };
+
+  // Handle duration change
+  const handleDurationChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const value = e.target.value;
+    console.log('Duration dropdown changed to:', value);
+    setSelectedDuration(value);
+    const newDuration = parseInt(value, 10);
+    console.log('Setting duration to:', newDuration);
+    setDuration(newDuration);
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -36,9 +147,8 @@ export default function InterviewSetup() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsLoading(true);
+    setIsSubmitting(true);
     setError('');
-    setDebugInfo('Starting interview setup...');
     setProgressiveQuestions([]);
     setProgressiveLoading(true);
     setProgressPercent(0);
@@ -53,7 +163,6 @@ export default function InterviewSetup() {
       // Clear any previous interview data
       localStorage.removeItem('interviewEvaluation');
       localStorage.removeItem('currentInterview');
-      setDebugInfo('Cleared previous interview data');
       
       // Clear any other interview-related data that might be stored
       const keysToRemove = [];
@@ -72,107 +181,69 @@ export default function InterviewSetup() {
       if (!jobDescription.trim()) {
         throw new Error('Job description is required');
       }
-      setDebugInfo('Inputs validated');
 
       // Upload CV if provided
       let cvText = null;
       if (cvFile) {
-        setDebugInfo('Uploading CV...');
         const formData = new FormData();
         formData.append('file', cvFile);
         
+        const token = await getAccessToken();
         const uploadResponse = await Promise.race([
           fetch(`${API_BASE_URL}/api/upload-cv`, {
             method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`
+            },
             body: formData,
           }),
           timeoutPromise
         ]) as Response;
         
         if (!uploadResponse.ok) {
-          throw new Error('Failed to upload CV');
+          const errorData = await uploadResponse.json().catch(() => ({ detail: 'Failed to upload CV' }));
+          throw new Error(errorData.detail || 'Failed to upload CV');
         }
         
         const cvUploadResponse = await uploadResponse.json();
         cvText = cvUploadResponse.cv_text;
-        setDebugInfo('CV uploaded successfully');
       }
 
       // Generate interview with progressive loading
-      setDebugInfo('Generating interview questions...');
-      console.log('Generating interview questions...');
-      
-      // Start a polling mechanism to check progress
-      const interviewId = `temp_${Date.now()}`;
-      let questionsGenerated = 0;
-      
-      // Set up polling for progressive updates
-      const pollInterval = setInterval(async () => {
-        try {
-          // Check if we already have all questions
-          if (questionsGenerated >= duration) {
-            clearInterval(pollInterval);
-            return;
-          }
-          
-          // Poll for new questions (this is a simulated endpoint - you'd need to implement this on the backend)
-          const pollResponse = await fetch(`${API_BASE_URL}/api/interview/questions/progress?id=${interviewId}`, {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-            }
-          });
-          
-          if (pollResponse.ok) {
-            const progressData = await pollResponse.json();
-            if (progressData.questions && progressData.questions.length > questionsGenerated) {
-              // Update with new questions
-              setProgressiveQuestions(progressData.questions);
-              questionsGenerated = progressData.questions.length;
-              
-              // Update progress percentage
-              const percent = Math.min(Math.round((questionsGenerated / duration) * 100), 99);
-              setProgressPercent(percent);
-              
-              setDebugInfo(`Generated ${questionsGenerated} of ${duration} questions (${percent}%)`);
-            }
-          }
-        } catch (error) {
-          // Ignore polling errors
-          console.error('Polling error:', error);
-        }
-      }, 2000); // Poll every 2 seconds
-      
+      setProgressiveQuestions([]);
+      setProgressiveLoading(true);
+      setProgressPercent(0);
+
       // Make the actual request to generate all questions
+      const token = await getAccessToken();
+      console.log('Sending interview request with duration:', duration);
+      console.log('Voice mode:', useVoiceMode, 'Video mode:', useVideoMode);
+      
       const interviewResponse = await Promise.race([
         fetch(`${API_BASE_URL}/api/interview/questions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
           },
           body: JSON.stringify({
             job_title: jobTitle,
             job_description: jobDescription,
             cv_text: cvText,
             interview_type: interviewType,
-            duration: duration,
+            duration: parseInt(selectedDuration, 10), // Use selectedDuration to ensure correct value
           }),
         }),
         timeoutPromise
       ]) as Response;
 
-      // Clear the polling interval once we have the full response
-      clearInterval(pollInterval);
-
       if (!interviewResponse.ok) {
-        const errorData = await interviewResponse.json();
+        const errorData = await interviewResponse.json().catch(() => ({ detail: 'Failed to generate interview' }));
         throw new Error(errorData.detail || 'Failed to generate interview');
       }
 
-      setDebugInfo('Parsing interview data...');
       const interviewData = await interviewResponse.json();
       console.log('Interview data received:', interviewData.interview_id);
-      setDebugInfo(`Interview data received: ${interviewData.interview_id}`);
       
       // Update progress to 100%
       setProgressPercent(100);
@@ -191,31 +262,58 @@ export default function InterviewSetup() {
         useVideoMode: useVideoMode,
         seniority_level: interviewData.seniority_level || 'mid'
       }));
-      setDebugInfo('Interview data stored in localStorage');
 
       // Navigate to the interview page
-      setDebugInfo('Navigating to interview session...');
       router.push(`/interview/session/${interviewData.interview_id}`);
     } catch (err) {
       console.error('Error during interview setup:', err);
-      setDebugInfo(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
       setError(err instanceof Error ? err.message : 'An unexpected error occurred');
     } finally {
-      setIsLoading(false);
+      setIsSubmitting(false);
       setProgressiveLoading(false);
     }
   };
 
+  // Add loading state for auth check
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center min-h-screen">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-indigo-500"></div>
+      </div>
+    );
+  }
+
   return (
-    <div className="container mx-auto px-4 py-8 max-w-4xl">
+    <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <h1 className="text-3xl font-bold text-gray-900 mb-6">Set Up Your Interview</h1>
+      
+      {error && (
+        <div className="mb-6 bg-red-50 border-l-4 border-red-400 p-4">
+          <div className="flex">
+            <div className="flex-shrink-0">
+              <svg className="h-5 w-5 text-red-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+              </svg>
+            </div>
+            <div className="ml-3">
+              <p className="text-sm text-red-700">{error}</p>
+            </div>
+          </div>
+        </div>
+      )}
+      
       <div className="bg-white rounded-lg shadow-lg p-6 md:p-8">
         <h1 className="text-3xl font-bold mb-6 text-center">Set Up Your Interview</h1>
         
-        {error && (
-          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-6">
-            {error}
-          </div>
-        )}
+        <div className="mb-6 bg-indigo-50 p-4 rounded-lg">
+          <h2 className="text-lg font-semibold text-indigo-700">Your Plan: {userPlan}</h2>
+          <p className="text-sm text-indigo-600 mt-1">
+            {planFeatureSettings.maxInterviews === -1 
+              ? 'Unlimited interviews' 
+              : `${planFeatureSettings.maxInterviews} interviews per month`}, 
+            up to {planFeatureSettings.interview_duration_max} minutes each
+          </p>
+        </div>
         
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="space-y-4">
@@ -254,13 +352,18 @@ export default function InterviewSetup() {
             
             <div>
               <label htmlFor="cv" className="block text-sm font-medium text-gray-700 mb-1">
-                Upload Your CV/Resume (Optional)
+                Upload Your CV/Resume {userPlan === 'Free' || userPlan === 'Basic' ? '(Professional+ Feature)' : '(Optional)'}
               </label>
               <div className="flex items-center space-x-2">
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  className="px-4 py-2 border border-gray-300 rounded-md bg-white text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  className={`px-4 py-2 border border-gray-300 rounded-md bg-white text-sm font-medium ${
+                    userPlan === 'Free' || userPlan === 'Basic' 
+                      ? 'text-gray-400 cursor-not-allowed' 
+                      : 'text-gray-700 hover:bg-gray-50'
+                  }`}
+                  disabled={userPlan === 'Free' || userPlan === 'Basic'}
                 >
                   Choose File
                 </button>
@@ -274,10 +377,13 @@ export default function InterviewSetup() {
                   onChange={handleFileChange}
                   accept=".pdf,.doc,.docx"
                   className="hidden"
+                  disabled={userPlan === 'Free' || userPlan === 'Basic'}
                 />
               </div>
               <p className="mt-1 text-xs text-gray-500">
-                Supported formats: PDF, DOC, DOCX
+                {userPlan === 'Free' || userPlan === 'Basic' 
+                  ? 'CV/Resume review is available in Professional and Enterprise plans.' 
+                  : 'Supported formats: PDF, DOC, DOCX'}
               </p>
             </div>
           </div>
@@ -306,78 +412,109 @@ export default function InterviewSetup() {
               </label>
               <select
                 id="duration"
-                value={duration}
-                onChange={(e) => setDuration(parseInt(e.target.value))}
+                value={selectedDuration}
+                onChange={handleDurationChange}
                 className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
               >
-                <option value="5">5 minutes (5 questions)</option>
-                <option value="15">15 minutes (15 questions)</option>
-                <option value="30">30 minutes (30 questions)</option>
-                <option value="60">60 minutes (60 questions)</option>
+                {availableDurations.map(d => (
+                  <option key={d} value={d.toString()}>{d} minutes ({d} questions)</option>
+                ))}
               </select>
               <p className="mt-1 text-xs text-gray-500">
-                The interview will generate 1 question per minute of duration.
+                The interview will generate 1 question per minute of duration. Your plan allows up to {planFeatureSettings.interview_duration_max} minutes.
               </p>
             </div>
           </div>
           
-          <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-lg font-medium text-gray-900">Voice Mode</h3>
-                <p className="text-sm text-gray-500">Enable voice conversation with the AI interviewer</p>
+          {planFeatureSettings.voiceMode && (
+            <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-medium text-gray-900">Voice Mode</h3>
+                  <p className="text-sm text-gray-500">Enable voice conversation with the AI interviewer</p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    className="sr-only peer" 
+                    checked={useVoiceMode}
+                    onChange={handleVoiceModeToggle}
+                  />
+                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                </label>
               </div>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input 
-                  type="checkbox" 
-                  className="sr-only peer" 
-                  checked={useVoiceMode}
-                  onChange={() => setUseVoiceMode(!useVoiceMode)}
-                />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
-              </label>
+              {useVoiceMode && (
+                <div className="mt-3 text-sm text-gray-600 bg-indigo-50 p-3 rounded-md">
+                  <p>Voice mode will allow you to:</p>
+                  <ul className="list-disc pl-5 mt-1 space-y-1">
+                    <li>Speak your answers instead of typing</li>
+                    <li>Hear the interviewer's questions</li>
+                    <li>Have a more natural conversation experience</li>
+                  </ul>
+                  <p className="mt-2 text-xs">Note: This requires microphone access.</p>
+                </div>
+              )}
             </div>
-            {useVoiceMode && (
-              <div className="mt-3 text-sm text-gray-600 bg-indigo-50 p-3 rounded-md">
-                <p>Voice mode will allow you to:</p>
-                <ul className="list-disc pl-5 mt-1 space-y-1">
-                  <li>Speak your answers instead of typing</li>
-                  <li>Hear the interviewer's questions</li>
-                  <li>Have a more natural conversation experience</li>
-                </ul>
-                <p className="mt-2 text-xs">Note: This requires microphone access.</p>
-              </div>
-            )}
-          </div>
+          )}
           
-          <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-lg font-medium text-gray-900">Video Mode</h3>
-                <p className="text-sm text-gray-500">Enable video for a more realistic interview experience</p>
+          {!planFeatureSettings.voiceMode && (
+            <div className="mt-4 p-4 bg-gray-100 rounded-lg border border-gray-200">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-medium text-gray-500">Voice Mode (Basic+ Feature)</h3>
+                  <p className="text-sm text-gray-500">Upgrade to Basic plan or higher to enable voice conversation</p>
+                </div>
+                <div className="relative inline-flex items-center">
+                  <div className="w-11 h-6 bg-gray-300 rounded-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5"></div>
+                </div>
               </div>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input 
-                  type="checkbox" 
-                  className="sr-only peer" 
-                  checked={useVideoMode}
-                  onChange={() => setUseVideoMode(!useVideoMode)}
-                />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
-              </label>
             </div>
-            {useVideoMode && (
-              <div className="mt-3 text-sm text-gray-600 bg-indigo-50 p-3 rounded-md">
-                <p>Video mode will allow you to:</p>
-                <ul className="list-disc pl-5 mt-1 space-y-1">
-                  <li>See yourself during the interview</li>
-                  <li>Practice your facial expressions and body language</li>
-                  <li>Create a more realistic interview environment</li>
-                </ul>
-                <p className="mt-2 text-xs">Note: This requires camera access. You can toggle video on/off during the interview.</p>
+          )}
+          
+          {planFeatureSettings.videoMode && (
+            <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-medium text-gray-900">Video Mode</h3>
+                  <p className="text-sm text-gray-500">Enable video for a more realistic interview experience</p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    className="sr-only peer" 
+                    checked={useVideoMode}
+                    onChange={handleVideoModeToggle}
+                  />
+                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                </label>
               </div>
-            )}
-          </div>
+              {useVideoMode && (
+                <div className="mt-3 text-sm text-gray-600 bg-indigo-50 p-3 rounded-md">
+                  <p>Video mode will allow you to:</p>
+                  <ul className="list-disc pl-5 mt-1 space-y-1">
+                    <li>See yourself during the interview</li>
+                    <li>Practice your facial expressions and body language</li>
+                    <li>Create a more realistic interview environment</li>
+                  </ul>
+                  <p className="mt-2 text-xs">Note: This requires camera access. You can toggle video on/off during the interview.</p>
+                </div>
+              )}
+            </div>
+          )}
+          
+          {!planFeatureSettings.videoMode && (
+            <div className="mt-4 p-4 bg-gray-100 rounded-lg border border-gray-200">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-medium text-gray-500">Video Mode (Professional+ Feature)</h3>
+                  <p className="text-sm text-gray-500">Upgrade to Professional plan or higher to enable video interviews</p>
+                </div>
+                <div className="relative inline-flex items-center">
+                  <div className="w-11 h-6 bg-gray-300 rounded-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5"></div>
+                </div>
+              </div>
+            </div>
+          )}
           
           <div className="mt-8 flex justify-between">
             <Link
@@ -388,12 +525,12 @@ export default function InterviewSetup() {
             </Link>
             <button
               type="submit"
-              disabled={isLoading}
+              disabled={isSubmitting}
               className={`px-6 py-3 rounded-md bg-indigo-600 text-white font-medium hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 ${
-                isLoading ? 'opacity-50 cursor-not-allowed' : ''
+                isSubmitting ? 'opacity-50 cursor-not-allowed' : ''
               }`}
             >
-              {isLoading ? (
+              {isSubmitting ? (
                 <div className="flex items-center">
                   <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
@@ -407,10 +544,10 @@ export default function InterviewSetup() {
             </button>
           </div>
           
-          {isLoading && (
+          {isSubmitting && (
             <div className="mt-4 p-3 bg-gray-100 rounded-md text-sm text-gray-700">
               <p className="font-medium">Setup Progress:</p>
-              <p>{debugInfo}</p>
+              <p>{progressPercent}% complete</p>
               
               {progressiveLoading && (
                 <div className="mt-3">

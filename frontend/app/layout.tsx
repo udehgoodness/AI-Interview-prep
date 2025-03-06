@@ -1,109 +1,82 @@
-import type { Metadata } from "next";
-import { Inter } from "next/font/google";
-import "./globals.css";
-import Link from "next/link";
+'use client';
 
-const inter = Inter({ subsets: ["latin"] });
+import './globals.css';
+import { Inter } from 'next/font/google';
+import Link from 'next/link';
+import Auth0ProviderWithNavigate from '../lib/auth0-provider';
+import { AuthProvider } from '../lib/auth-context';
+import UserProfile from '../components/ui/user-profile';
 
-export const metadata: Metadata = {
-  title: "AI Interview Prep",
-  description: "AI-powered interview preparation platform",
-};
+const inter = Inter({ subsets: ['latin'] });
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode;
-}>) {
+}) {
   return (
     <html lang="en">
       <body className={inter.className}>
-        <div className="flex flex-col min-h-screen">
-          {/* Header */}
-          <header className="bg-gray-900 text-white shadow-md">
-            <div className="container mx-auto px-6 py-4">
-              <div className="flex justify-between items-center">
-                <Link href="/" className="text-2xl font-bold">
-                  AI Interview Prep
-                </Link>
-                <nav className="hidden md:flex space-x-8">
-                  <Link href="/" className="hover:text-indigo-400 transition-colors">
-                    Home
-                  </Link>
-                  <Link href="/interview/setup" className="hover:text-indigo-400 transition-colors">
-                    Practice
-                  </Link>
-                  <Link href="/about" className="hover:text-indigo-400 transition-colors">
-                    About
-                  </Link>
-                </nav>
-                <div className="flex space-x-4">
-                  <Link 
-                    href="/auth/login" 
-                    className="hover:text-indigo-400 transition-colors"
-                  >
-                    Login
-                  </Link>
-                  <Link 
-                    href="/auth/signup" 
-                    className="bg-indigo-600 hover:bg-indigo-700 px-4 py-2 rounded-lg transition-colors"
-                  >
-                    Sign Up
-                  </Link>
+        <Auth0ProviderWithNavigate>
+          <AuthProvider>
+            <div className="min-h-screen flex flex-col">
+              <header className="bg-white shadow-sm relative z-10">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                  <div className="flex justify-between h-16">
+                    <div className="flex">
+                      <div className="flex-shrink-0 flex items-center">
+                        <Link href="/" className="text-xl font-bold text-indigo-600">
+                          AI Interview Prep
+                        </Link>
+                      </div>
+                      <nav className="ml-6 flex space-x-8">
+                        <Link
+                          href="/"
+                          className="inline-flex items-center px-1 pt-1 border-b-2 border-transparent text-sm font-medium text-gray-500 hover:text-gray-700 hover:border-gray-300"
+                        >
+                          Home
+                        </Link>
+                        <Link
+                          href="/interview/setup"
+                          className="inline-flex items-center px-1 pt-1 border-b-2 border-transparent text-sm font-medium text-gray-500 hover:text-gray-700 hover:border-gray-300"
+                        >
+                          New Interview
+                        </Link>
+                        <Link
+                          href="/subscription/plans"
+                          className="inline-flex items-center px-1 pt-1 border-b-2 border-transparent text-sm font-medium text-gray-500 hover:text-gray-700 hover:border-gray-300"
+                        >
+                          Pricing
+                        </Link>
+                        <Link
+                          href="/about"
+                          className="inline-flex items-center px-1 pt-1 border-b-2 border-transparent text-sm font-medium text-gray-500 hover:text-gray-700 hover:border-gray-300"
+                        >
+                          About
+                        </Link>
+                      </nav>
+                    </div>
+                    <div className="flex items-center">
+                      <UserProfile />
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
-          </header>
-
-          {/* Main content */}
-          <main className="flex-grow">
-            {children}
-          </main>
-
-          {/* Footer */}
-          <footer className="bg-gray-900 text-white py-8">
-            <div className="container mx-auto px-6">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                <div>
-                  <h3 className="text-xl font-bold mb-4">AI Interview Prep</h3>
-                  <p className="text-gray-400">
-                    Prepare for your next interview with our AI-powered platform.
+              </header>
+              <main className="flex-grow relative z-0">
+                <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+                  {children}
+                </div>
+              </main>
+              <footer className="bg-white relative z-10">
+                <div className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
+                  <p className="text-center text-sm text-gray-500">
+                    &copy; {new Date().getFullYear()} AI Interview Prep. All rights reserved.
                   </p>
                 </div>
-                <div>
-                  <h3 className="text-lg font-semibold mb-4">Quick Links</h3>
-                  <ul className="space-y-2">
-                    <li>
-                      <Link href="/" className="text-gray-400 hover:text-white transition-colors">
-                        Home
-                      </Link>
-                    </li>
-                    <li>
-                      <Link href="/interview/setup" className="text-gray-400 hover:text-white transition-colors">
-                        Practice Interview
-                      </Link>
-                    </li>
-                    <li>
-                      <Link href="/about" className="text-gray-400 hover:text-white transition-colors">
-                        About Us
-                      </Link>
-                    </li>
-                  </ul>
-                </div>
-                <div>
-                  <h3 className="text-lg font-semibold mb-4">Contact</h3>
-                  <ul className="space-y-2 text-gray-400">
-                    <li>Email: contact@aiinterviewprep.com</li>
-                    <li>Follow us on Twitter: @aiinterviewprep</li>
-                  </ul>
-                </div>
-              </div>
-              <div className="border-t border-gray-800 mt-8 pt-6 text-center text-gray-400">
-                <p>&copy; {new Date().getFullYear()} AI Interview Prep. All rights reserved.</p>
-              </div>
+              </footer>
             </div>
-          </footer>
-        </div>
+          </AuthProvider>
+        </Auth0ProviderWithNavigate>
       </body>
     </html>
   );

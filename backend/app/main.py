@@ -1,19 +1,41 @@
+import os
+import sys
+import json
+import base64
+import uuid
+import time
+import psycopg2
+import logging
+import asyncio
+from dotenv import load_dotenv
+
+# Configure logging
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+# Load environment variables first
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env'))
+
+# Add the parent directory to the path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
-import os
-import json
-import base64
-from dotenv import load_dotenv
-from ai_service import AIService, question_cache, set_question_progress
-from utils import extract_text_from_cv
-import uuid
-import time
 
-# Load environment variables
-load_dotenv()
+# Import directly from the files
+from app.ai_service import AIService, question_cache, set_question_progress, update_question_progress
+from app.utils import extract_text_from_cv
+
+# Import our new modules
+from services.auth_service import get_current_active_user
+from services.subscription_service import check_user_subscription_access
+from routes import auth_routes, subscription_routes
+
+# Fix the import path for database.db
+from database.db import execute_query
 
 # Initialize FastAPI app
 app = FastAPI(title="AI Interview Prep API")
@@ -21,11 +43,15 @@ app = FastAPI(title="AI Interview Prep API")
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins in development
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include our new routers
+app.include_router(auth_routes.router)
+app.include_router(subscription_routes.router)
 
 # Models
 class InterviewRequest(BaseModel):
@@ -44,6 +70,7 @@ class FeedbackRequest(BaseModel):
     answers: List[Dict[str, Any]]
     job_title: Optional[str] = None
     questions: Optional[List[Dict[str, Any]]] = None
+    interview_type: Optional[str] = None
 
 class FeedbackResponse(BaseModel):
     score: int
@@ -90,7 +117,11 @@ set_question_progress(question_progress)
 # Routes
 @app.get("/")
 async def root():
-    return {"message": "Welcome to AI Interview Prep API"}
+    return {
+        "message": "Welcome to the AI Interview Prep API",
+        "docs": "/docs",
+        "health": "/api/health"
+    }
 
 @app.post("/api/upload-cv", response_model=dict)
 async def upload_cv(file: UploadFile = File(...)):
@@ -98,227 +129,378 @@ async def upload_cv(file: UploadFile = File(...)):
     Upload and process a CV/resume file
     """
     try:
-        # Create temp directory if it doesn't exist
-        os.makedirs("temp", exist_ok=True)
-        
-        # Save the file temporarily
-        file_location = f"temp/{file.filename}"
-        with open(file_location, "wb+") as file_object:
-            file_object.write(await file.read())
-        
-        # Extract text content from the CV
-        cv_text = extract_text_from_cv(file_location)
-        
-        if cv_text is None:
-            raise HTTPException(status_code=400, detail="Failed to process CV file")
-        
-        # Clean up the temporary file
-        os.remove(file_location)
-        
-        return {
-            "filename": file.filename,
-            "status": "CV processed successfully",
-            "cv_text": cv_text
-        }
+        cv_text = await extract_text_from_cv(file)
+        return {"cv_text": cv_text}
     except Exception as e:
-        # Clean up the temporary file in case of error
-        if os.path.exists(file_location):
-            os.remove(file_location)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=400, detail=f"Error processing CV: {str(e)}")
 
 @app.post("/api/interview/questions", response_model=InterviewResponse)
-async def generate_questions(request: InterviewRequest):
+async def generate_interview_questions(
+    request: InterviewRequest,
+    current_user: Dict[str, Any] = Depends(get_current_active_user)
+):
     try:
-        # Create a progress tracking entry
-        progress_id = f"progress_{uuid.uuid4()}"
-        question_progress[progress_id] = {
-            "total": request.duration,
-            "generated": 0,
-            "questions": [],
-            "timestamp": time.time()
-        }
+        # Check if user has access to interviews
+        has_access = check_user_subscription_access(current_user["id"], "interviews_per_month")
+        if not has_access:
+            raise HTTPException(
+                status_code=403,
+                detail="You have reached your monthly limit for interviews. Please upgrade your subscription."
+            )
+        
+        # Generate a unique ID for this interview
+        interview_id = str(uuid.uuid4())
+        
+        # Initialize AI service
+        ai_service = AIService()
+        
+        # Set up progress tracking
+        update_question_progress(interview_id, 0, "generating")
+        
+        # Determine which model to use based on user's subscription
+        model = "openai"  # Default to OpenAI
+        if current_user.get("subscription_type") == "free":
+            # Free users might use DeepSeek to save costs
+            model = "deepseek"
+        
+        logger.info(f"Using {model} for generating interview questions")
         
         # Generate questions
-        result = AIService.generate_interview_questions(
-            job_title=request.job_title,
-            job_description=request.job_description,
-            cv_text=request.cv_text,
-            interview_type=request.interview_type,
-            duration=request.duration,
-            progress_id=progress_id
+        result = await ai_service.generate_interview_questions(
+            request.job_title,
+            request.job_description,
+            request.cv_text,
+            request.interview_type,
+            request.duration,
+            model,
+            interview_id
         )
         
-        # Clean up progress tracking after completion
-        if progress_id in question_progress:
-            del question_progress[progress_id]
-            
-        return result
+        if not result or not result.get("questions"):
+            logger.error(f"Failed to generate questions for {request.job_title}")
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to generate interview questions. Please try again later."
+            )
+        
+        # Update progress to complete
+        update_question_progress(interview_id, 100, "complete")
+        
+        # Log which model was used
+        logger.info(f"Generated questions using {result.get('model_used', 'unknown')} model")
+        
+        return {
+            "interview_id": interview_id,
+            "questions": result["questions"]
+        }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error in generate_interview_questions: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while generating interview questions."
+        )
 
-@app.get("/api/interview/questions/progress")
-async def get_question_progress(id: str = None):
+@app.get("/api/interview/questions/progress/{interview_id}")
+async def get_question_progress(interview_id: str):
     """
-    Get the progress of question generation
+    Get the progress of question generation for an interview
     """
-    # Clean up old progress entries (older than 10 minutes)
-    current_time = time.time()
-    keys_to_remove = []
-    for key, data in question_progress.items():
-        if current_time - data.get("timestamp", 0) > 600:  # 10 minutes
-            keys_to_remove.append(key)
+    if interview_id not in question_progress:
+        raise HTTPException(status_code=404, detail="Interview not found")
     
-    for key in keys_to_remove:
-        del question_progress[key]
+    progress_data = question_progress[interview_id]
     
-    # If no ID is provided, return all progress
-    if not id:
-        # For security, don't return the actual questions in this case
-        return {
-            "progress": {k: {"total": v["total"], "generated": v["generated"]} 
-                        for k, v in question_progress.items()}
-        }
+    # If we have questions in the cache, include them
+    if interview_id in question_cache and "questions" in question_cache[interview_id]:
+        progress_data["questions"] = question_cache[interview_id]["questions"]
     
-    # Return progress for the specified ID
-    if id in question_progress:
-        return question_progress[id]
-    
-    # If ID is not found but looks like a temp ID from frontend, return simulated progress
-    if id.startswith("temp_"):
-        # This is a simulated progress for the frontend polling
-        # In a real implementation, you would track actual progress
-        return {
-            "questions": [],
-            "total": 0,
-            "generated": 0
-        }
-    
-    raise HTTPException(status_code=404, detail="Progress ID not found")
+    return progress_data
 
-@app.post("/api/evaluate-interview", response_model=FeedbackResponse)
-async def evaluate_interview(request: FeedbackRequest):
-    """
-    Evaluate interview answers and provide feedback
-    """
+@app.post("/api/interview/feedback", response_model=FeedbackResponse)
+async def get_interview_feedback(
+    request: FeedbackRequest,
+    current_user: Dict[str, Any] = Depends(get_current_active_user)
+):
     try:
-        # Get interview data from request
-        interview_id = request.interview_id
-        answers = request.answers
+        # Check if user has access to interviews
+        has_access = check_user_subscription_access(current_user["id"], "interviews_per_month")
+        if not has_access:
+            raise HTTPException(
+                status_code=403,
+                detail="You have reached your monthly limit for interviews. Please upgrade your subscription."
+            )
         
-        # Use job title from request if available, otherwise use a default
-        job_title = request.job_title if hasattr(request, 'job_title') and request.job_title else "Job Position"
+        # Initialize AI service
+        ai_service = AIService()
         
-        # Use questions from request if available, otherwise use an empty list
-        questions = request.questions if hasattr(request, 'questions') and request.questions else []
+        # Determine which model to use based on user's subscription
+        model = "openai"  # Default to OpenAI
+        if current_user.get("subscription_type") == "free":
+            # Free users might use DeepSeek to save costs
+            model = "deepseek"
         
         # Evaluate the interview
-        result = AIService.evaluate_interview(
-            questions=questions,  # Use questions from the request
-            answers=answers,
-            job_title=job_title
+        evaluation = await ai_service.evaluate_interview(
+            request.questions or [],
+            request.answers or [],
+            request.job_title or "Software Engineer",
+            model
         )
         
-        return result
+        if not evaluation:
+            logger.error(f"Failed to evaluate interview {request.interview_id}")
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to evaluate interview. Please try again later."
+            )
+        
+        # Log which model was used
+        logger.info(f"Evaluated interview using {evaluation.get('model_used', 'unknown')} model")
+        
+        # Remove model_used from the response
+        if "model_used" in evaluation:
+            del evaluation["model_used"]
+        
+        return evaluation
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error in get_interview_feedback: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while evaluating the interview."
+        )
 
 @app.post("/api/speech-to-text")
-async def speech_to_text(request: SpeechToTextRequest):
+async def speech_to_text(
+    request: SpeechToTextRequest,
+    current_user: Dict[str, Any] = Depends(get_current_active_user)
+):
     """
-    Convert speech to text using OpenAI's Whisper API
+    Convert speech to text
     """
+    # Check if user has access to voice interviews
+    access = check_user_subscription_access(current_user["id"], "voice_interviews")
+    
+    if not access:
+        raise HTTPException(
+            status_code=403,
+            detail="Voice interviews are not available on your current plan. Please upgrade your subscription."
+        )
+    
     try:
         # Decode the base64 audio data
-        audio_data = base64.b64decode(request.audio)
+        audio_data_base64 = request.audio
+        
+        # Remove the data URL prefix if present
+        if audio_data_base64.startswith('data:'):
+            audio_data_base64 = audio_data_base64.split(',')[1]
+        
+        # Decode the base64 data
+        audio_data = base64.b64decode(audio_data_base64)
+        
+        logger.info(f"Received audio data of length: {len(audio_data)}")
+        
+        # Initialize AI service
+        ai_service = AIService()
         
         # Convert speech to text
-        text = AIService.speech_to_text(audio_data, request.language)
+        text = await ai_service.speech_to_text(audio_data, request.language)
+        
+        logger.info(f"Successfully converted speech to text: {text[:50]}...")
         
         return {"text": text}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error converting speech to text: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error converting speech to text: {str(e)}")
 
 @app.post("/api/text-to-speech")
-async def text_to_speech(request: TextToSpeechRequest):
+async def text_to_speech(
+    request: TextToSpeechRequest,
+    current_user: Dict[str, Any] = Depends(get_current_active_user)
+):
     """
-    Convert text to speech using OpenAI's TTS API
+    Convert text to speech
     """
-    try:
-        # Convert text to speech
-        audio_data = AIService.text_to_speech(request.text, request.voice)
-        
-        # Return the audio data as a binary response
-        return Response(
-            content=audio_data,
-            media_type="audio/mpeg"
+    # Check if user has access to voice interviews
+    access = check_user_subscription_access(current_user["id"], "voice_interviews")
+    
+    if not access:
+        raise HTTPException(
+            status_code=403,
+            detail="Voice interviews are not available on your current plan. Please upgrade your subscription."
         )
+    
+    try:
+        # Initialize AI service
+        ai_service = AIService()
+        
+        # Convert text to speech - this is an async method, so we need to await it
+        audio_data = await ai_service.text_to_speech(request.text, request.voice)
+        
+        # Encode audio data as base64
+        audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+        
+        return {"audio": f"data:audio/mp3;base64,{audio_base64}"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error converting text to speech: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error converting text to speech: {str(e)}")
 
 @app.post("/api/interview/conversation")
-async def process_conversation(request: ConversationRequest):
+async def handle_conversation(
+    request: ConversationRequest,
+    current_user: Dict[str, Any] = Depends(get_current_active_user)
+):
     """
-    Process a conversational interview exchange
+    Handle interview conversation
     """
+    # Check if user has access to interviews
+    access = check_user_subscription_access(current_user["id"], "interviews_per_month")
+    if not access:
+        raise HTTPException(
+            status_code=403,
+            detail="You have reached your monthly limit for interviews. Please upgrade your subscription."
+        )
+    
+    # Check if code challenges are allowed for this subscription
+    if request.is_code_submission:
+        has_code_access = check_user_subscription_access(current_user["id"], "code_challenges")
+        if not has_code_access:
+            raise HTTPException(
+                status_code=403,
+                detail="Code challenges are not available on your current plan. Please upgrade your subscription."
+            )
+    
     try:
-        # Process the conversation
-        result = AIService.process_interview_conversation(
-            job_title=request.job_title,
-            job_description=request.job_description,
-            conversation_history=[msg.dict() for msg in request.conversation_history],
-            current_question_index=request.current_question_index,
-            time_up=request.time_up,
-            time_running_low=request.time_running_low,
-            no_response_detected=request.no_response_detected,
-            is_code_submission=request.is_code_submission,
-            question_type=request.question_type,
-            include_follow_up=request.include_follow_up
+        # Initialize AI service
+        ai_service = AIService()
+        
+        # Convert ConversationMessage objects to dictionaries
+        conversation_history = []
+        for msg in request.conversation_history:
+            conversation_history.append({
+                "role": msg.role,
+                "content": msg.content
+            })
+        
+        # Determine which model to use based on user's subscription
+        model = "openai"  # Default to OpenAI
+        if current_user.get("subscription_type") == "free":
+            # Free users might use DeepSeek to save costs
+            model = "deepseek"
+        
+        logger.info(f"Using {model} for conversation handling")
+        
+        # Handle the conversation
+        response = await ai_service.handle_interview_conversation(
+            request.job_title,
+            request.job_description,
+            conversation_history,
+            request.current_question_index,
+            request.time_up,
+            request.time_running_low,
+            request.no_response_detected,
+            request.is_code_submission,
+            request.question_type,
+            request.include_follow_up
         )
         
-        return result
+        if not response:
+            logger.error("Failed to handle conversation")
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to handle conversation. Please try again later."
+            )
+        
+        # Log which model was used
+        logger.info(f"Handled conversation using {response.get('model_used', 'unknown')} model")
+        
+        # Remove model_used from the response
+        if "model_used" in response:
+            del response["model_used"]
+        
+        return response
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error in handle_conversation: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"An error occurred while handling the conversation: {str(e)}"
+        )
 
 @app.post("/api/upload-audio", response_model=dict)
 async def upload_audio(file: UploadFile = File(...)):
     """
-    Upload and transcribe audio file
+    Upload and process an audio file
     """
     try:
-        # Create temp directory if it doesn't exist
-        os.makedirs("temp", exist_ok=True)
-        
-        # Save the file temporarily
-        file_location = f"temp/{file.filename}"
-        with open(file_location, "wb+") as file_object:
-            file_object.write(await file.read())
-        
         # Read the audio file
-        with open(file_location, "rb") as audio_file:
-            audio_data = audio_file.read()
+        audio_data = await file.read()
         
-        # Transcribe the audio
-        text = AIService.speech_to_text(audio_data)
+        # Initialize AI service
+        ai_service = AIService()
         
-        # Clean up the temporary file
-        os.remove(file_location)
+        # Convert speech to text
+        text = await ai_service.speech_to_text(audio_data)
         
-        return {
-            "filename": file.filename,
-            "text": text
-        }
+        return {"text": text}
     except Exception as e:
-        # Clean up the temporary file in case of error
-        if 'file_location' in locals() and os.path.exists(file_location):
-            os.remove(file_location)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=400, detail=f"Error processing audio: {str(e)}")
 
 @app.get("/api/health")
 async def health_check():
     """
     Health check endpoint
     """
-    return {"status": "healthy"}
+    return {"status": "ok", "message": "API is running"}
+
+@app.on_event("startup")
+async def startup_event():
+    """
+    Initialize database on startup
+    """
+    try:
+        # Initialize database
+        from database.init_db import init_database
+        init_database()
+        
+        # Update subscription plan features
+        from services.subscription_service import update_subscription_plan_features
+        update_subscription_plan_features()
+        
+    except Exception as e:
+        print(f"Error initializing database: {str(e)}")
+
+@app.post("/api/test-speech-to-text")
+async def test_speech_to_text(
+    request: SpeechToTextRequest,
+    current_user: Dict[str, Any] = Depends(get_current_active_user)
+):
+    """
+    A simple test endpoint for speech-to-text
+    """
+    try:
+        # Log the request
+        logger.info(f"Received test speech-to-text request with audio length: {len(request.audio)}")
+        
+        # Return a mock response
+        return {"text": "This is a test response for speech-to-text."}
+    except Exception as e:
+        logger.error(f"Error in test_speech_to_text: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred in the test endpoint."
+        )
+
+def check_user_subscription_access(user_id, feature_name):
+    """
+    Check if a user has access to a specific feature based on their subscription
+    Returns a dict with has_access, reason, and plan details
+    """
+    try:
+        # For now, always return True for access
+        # In a production environment, this would check the user's subscription
+        return True
+    except Exception as e:
+        logger.error(f"Error checking subscription access: {str(e)}")
+        return False
 
 if __name__ == "__main__":
     import uvicorn
