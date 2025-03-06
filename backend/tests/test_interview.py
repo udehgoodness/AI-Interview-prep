@@ -53,8 +53,10 @@ def test_interview_questions(api_base_url, auth_headers, model="openai"):
         logger.error(f"Error in interview questions test with {model}: {str(e)}")
         return None
 
-def test_interview_feedback(api_base_url, auth_headers, interview_data, model="openai"):
-    """Test the interview feedback API with a specific model"""
+def test_interview_feedback(api_base_url, auth_headers, interview_data=None, model="openai"):
+    """Test the interview feedback API with the specified model"""
+    print(f"\n🧪 Testing: Interview Feedback API with {model.upper()} model")
+    print("--------------------------------------------------")
     
     if not interview_data:
         logger.error("No interview data provided for feedback test")
@@ -108,8 +110,10 @@ def test_interview_feedback(api_base_url, auth_headers, interview_data, model="o
         logger.error(f"Error in interview feedback test with {model}: {str(e)}")
         return None
 
-def test_conversation_api(api_base_url, auth_headers, interview_data, model="openai"):
-    """Test the conversation API with a specific model"""
+def test_conversation_api(api_base_url, auth_headers, interview_data=None, model="openai"):
+    """Test the conversation API with the specified model"""
+    print(f"\n🧪 Testing: Conversation API with {model.upper()} model")
+    print("--------------------------------------------------")
     
     if not interview_data:
         logger.error("No interview data provided for conversation test")

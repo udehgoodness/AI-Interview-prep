@@ -6,25 +6,26 @@ from dotenv import load_dotenv
 
 def get_access_token(api_base_url):
     """Get an access token for testing"""
-    # Try to login with test user
+    # Try to login with pro test user
     login_data = {
-        "username": "test@example.com",
-        "password": "Password123!"
+        "username": "pro_user@example.com",
+        "password": "Test1234!"
     }
     
     response = requests.post(
         f"{api_base_url}/api/auth/token",
-        data=login_data
+        data=login_data,
+        headers={"Content-Type": "application/x-www-form-urlencoded"}
     )
     
     if response.status_code == 200:
         return response.json().get("access_token")
     else:
-        # If login fails, try to create a test user
+        # If login fails, try to create a pro test user
         register_data = {
-            "email": "test@example.com",
-            "password": "Password123!",
-            "full_name": "Test User"
+            "email": "pro_user@example.com",
+            "password": "Test1234!",
+            "full_name": "Pro Test User"
         }
         
         register_response = requests.post(
@@ -36,11 +37,22 @@ def get_access_token(api_base_url):
             # Try to login again
             response = requests.post(
                 f"{api_base_url}/api/auth/token",
-                data=login_data
+                data=login_data,
+                headers={"Content-Type": "application/x-www-form-urlencoded"}
             )
             
             if response.status_code == 200:
-                return response.json().get("access_token")
+                # Upgrade user to pro plan
+                token = response.json().get("access_token")
+                
+                # Make a request to upgrade the user to pro plan
+                upgrade_response = requests.post(
+                    f"{api_base_url}/api/subscriptions/upgrade/pro",
+                    headers={"Authorization": f"Bearer {token}"}
+                )
+                
+                if upgrade_response.status_code == 200:
+                    return token
     
     return None
 

@@ -5,10 +5,12 @@ import pytest
 import os
 import sys
 import requests
-from .test_auth import get_access_token
 
 # Add the parent directory to the path so we can import modules from the backend
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Import after adding the parent directory to the path
+from tests.test_auth import get_access_token
 
 # Define fixtures that can be used across tests
 @pytest.fixture

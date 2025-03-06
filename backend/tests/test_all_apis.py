@@ -10,6 +10,7 @@ import base64
 import requests
 import logging
 import time
+import pytest
 from datetime import datetime
 
 # Configure logging
@@ -44,14 +45,14 @@ def get_auth_token():
             logger.error(f"Response: {e.response.text}")
         return None
 
-def test_interview_questions(token, model="openai"):
+def test_interview_questions(api_base_url, auth_headers, model="openai"):
     """Test the interview questions API with the specified model"""
     print(f"\n🧪 Testing: Interview Questions API with {model.upper()} model")
     print("--------------------------------------------------")
     
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {token}"
+        "Authorization": f"Bearer {auth_headers}"
     }
     
     # Test data
@@ -66,7 +67,7 @@ def test_interview_questions(token, model="openai"):
     try:
         print("Sending request...")
         response = requests.post(
-            f"{API_BASE_URL}/api/interview/questions",
+            f"{api_base_url}/api/interview/questions",
             headers=headers,
             json=data
         )
@@ -111,7 +112,7 @@ def test_interview_questions(token, model="openai"):
         print(f"❌ Error:\n   {e}")
         return None
 
-def test_interview_feedback(token, interview_data, model="openai"):
+def test_interview_feedback(api_base_url, auth_headers, interview_data=None, model="openai"):
     """Test the interview feedback API with the specified model"""
     print(f"\n🧪 Testing: Interview Feedback API with {model.upper()} model")
     print("--------------------------------------------------")
@@ -122,7 +123,7 @@ def test_interview_feedback(token, interview_data, model="openai"):
     
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {token}"
+        "Authorization": f"Bearer {auth_headers}"
     }
     
     # Test data
@@ -142,7 +143,7 @@ def test_interview_feedback(token, interview_data, model="openai"):
     try:
         print("Sending request...")
         response = requests.post(
-            f"{API_BASE_URL}/api/interview/feedback",
+            f"{api_base_url}/api/interview/feedback",
             headers=headers,
             json=data
         )
@@ -183,14 +184,14 @@ def test_interview_feedback(token, interview_data, model="openai"):
         print(f"❌ Error:\n   {e}")
         return None
 
-def test_text_to_speech(token, model="openai"):
+def test_text_to_speech(api_base_url, auth_headers, model="openai"):
     """Test the text-to-speech API with the specified model"""
     print(f"\n🧪 Testing: Text-to-Speech API with {model.upper()} model")
     print("--------------------------------------------------")
     
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {token}"
+        "Authorization": f"Bearer {auth_headers}"
     }
     
     # Test data
@@ -203,7 +204,7 @@ def test_text_to_speech(token, model="openai"):
     try:
         print("Sending request...")
         response = requests.post(
-            f"{API_BASE_URL}/api/text-to-speech",
+            f"{api_base_url}/api/text-to-speech",
             headers=headers,
             json=data
         )
@@ -252,7 +253,7 @@ def test_text_to_speech(token, model="openai"):
         print(f"❌ Error:\n   {e}")
         return False
 
-def test_speech_to_text(token, model="openai"):
+def test_speech_to_text(api_base_url, auth_headers, model="openai"):
     """Test the speech-to-text API with the specified model"""
     print(f"\n🧪 Testing: Speech-to-Text API with {model.upper()} model")
     print("--------------------------------------------------")
@@ -265,7 +266,7 @@ def test_speech_to_text(token, model="openai"):
     
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {token}"
+        "Authorization": f"Bearer {auth_headers}"
     }
     
     # Read the audio file and encode it as base64
@@ -286,7 +287,7 @@ def test_speech_to_text(token, model="openai"):
         print(f"Audio data size: {len(audio_bytes) / 1024:.2f} KB")
         
         response = requests.post(
-            f"{API_BASE_URL}/api/speech-to-text",
+            f"{api_base_url}/api/speech-to-text",
             headers=headers,
             json=data
         )
@@ -317,14 +318,14 @@ def test_speech_to_text(token, model="openai"):
         print(f"❌ Error:\n   {e}")
         return False
 
-def test_conversation_api(token, interview_data, model="openai"):
+def test_conversation_api(api_base_url, auth_headers, interview_data=None, model="openai"):
     """Test the conversation API with the specified model"""
     print(f"\n🧪 Testing: Conversation API with {model.upper()} model")
     print("--------------------------------------------------")
     
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {token}"
+        "Authorization": f"Bearer {auth_headers}"
     }
     
     # Test data
@@ -354,7 +355,7 @@ def test_conversation_api(token, interview_data, model="openai"):
     try:
         print("Sending request...")
         response = requests.post(
-            f"{API_BASE_URL}/api/interview/conversation",
+            f"{api_base_url}/api/interview/conversation",
             headers=headers,
             json=data
         )
@@ -411,18 +412,16 @@ def test_conversation_api(token, interview_data, model="openai"):
 
 def run_all_tests():
     """Run all API tests with both OpenAI and DeepSeek models"""
-    print(f"Running tests at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("\n🚀 Running all API tests...")
     print("==================================================")
     
     # Get authentication token
     token = get_auth_token()
     if not token:
-        print("❌ Failed to get authentication token. Cannot proceed with tests.")
-        return False
+        print("❌ Failed to get authentication token. Exiting.")
+        return
     
-    print("✅ Successfully authenticated")
-    
-    # Test results tracking
+    # Results dictionary
     results = {
         "openai": {
             "interview_questions": False,
@@ -441,48 +440,48 @@ def run_all_tests():
     }
     
     # Test with OpenAI model
-    print("\n🔍 Testing APIs with OpenAI model")
+    print("\n🔍 Testing OpenAI APIs...")
     print("==================================================")
     
     # Test interview questions API
-    interview_data_openai = test_interview_questions(token, "openai")
+    interview_data_openai = test_interview_questions(API_BASE_URL, {"Authorization": f"Bearer {token}"}, "openai")
     results["openai"]["interview_questions"] = bool(interview_data_openai)
     
     # Test interview feedback API
     if interview_data_openai:
-        feedback_result_openai = test_interview_feedback(token, interview_data_openai, "openai")
+        feedback_result_openai = test_interview_feedback(API_BASE_URL, {"Authorization": f"Bearer {token}"}, interview_data_openai, "openai")
         results["openai"]["interview_feedback"] = bool(feedback_result_openai)
     
     # Test text-to-speech API
-    results["openai"]["text_to_speech"] = test_text_to_speech(token, "openai")
+    results["openai"]["text_to_speech"] = test_text_to_speech(API_BASE_URL, {"Authorization": f"Bearer {token}"}, "openai")
     
     # Test speech-to-text API
-    results["openai"]["speech_to_text"] = test_speech_to_text(token, "openai")
+    results["openai"]["speech_to_text"] = test_speech_to_text(API_BASE_URL, {"Authorization": f"Bearer {token}"}, "openai")
     
     # Test conversation API
-    results["openai"]["conversation"] = test_conversation_api(token, interview_data_openai, "openai")
+    results["openai"]["conversation"] = test_conversation_api(API_BASE_URL, {"Authorization": f"Bearer {token}"}, interview_data_openai, "openai")
     
     # Test with DeepSeek model
-    print("\n🔍 Testing APIs with DeepSeek model")
+    print("\n🔍 Testing DeepSeek APIs...")
     print("==================================================")
     
     # Test interview questions API
-    interview_data_deepseek = test_interview_questions(token, "deepseek")
+    interview_data_deepseek = test_interview_questions(API_BASE_URL, {"Authorization": f"Bearer {token}"}, "deepseek")
     results["deepseek"]["interview_questions"] = bool(interview_data_deepseek)
     
     # Test interview feedback API
     if interview_data_deepseek:
-        feedback_result_deepseek = test_interview_feedback(token, interview_data_deepseek, "deepseek")
+        feedback_result_deepseek = test_interview_feedback(API_BASE_URL, {"Authorization": f"Bearer {token}"}, interview_data_deepseek, "deepseek")
         results["deepseek"]["interview_feedback"] = bool(feedback_result_deepseek)
     
     # Test text-to-speech API
-    results["deepseek"]["text_to_speech"] = test_text_to_speech(token, "deepseek")
+    results["deepseek"]["text_to_speech"] = test_text_to_speech(API_BASE_URL, {"Authorization": f"Bearer {token}"}, "deepseek")
     
     # Test speech-to-text API
-    results["deepseek"]["speech_to_text"] = test_speech_to_text(token, "deepseek")
+    results["deepseek"]["speech_to_text"] = test_speech_to_text(API_BASE_URL, {"Authorization": f"Bearer {token}"}, "deepseek")
     
     # Test conversation API
-    results["deepseek"]["conversation"] = test_conversation_api(token, interview_data_deepseek, "deepseek")
+    results["deepseek"]["conversation"] = test_conversation_api(API_BASE_URL, {"Authorization": f"Bearer {token}"}, interview_data_deepseek, "deepseek")
     
     # Print summary
     print("\n📊 Test Results Summary")
