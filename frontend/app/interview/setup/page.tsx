@@ -232,6 +232,8 @@ export default function InterviewSetup() {
             cv_text: cvText,
             interview_type: interviewType,
             duration: parseInt(selectedDuration, 10), // Use selectedDuration to ensure correct value
+            use_voice_mode: useVoiceMode,
+            use_video_mode: useVideoMode
           }),
         }),
         timeoutPromise

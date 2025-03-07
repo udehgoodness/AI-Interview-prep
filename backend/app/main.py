@@ -60,10 +60,14 @@ class InterviewRequest(BaseModel):
     cv_text: Optional[str] = None
     interview_type: str = "general"
     duration: int = 30
+    use_voice_mode: Optional[bool] = False
+    use_video_mode: Optional[bool] = False
 
 class InterviewResponse(BaseModel):
     interview_id: str
     questions: List[Dict[str, Any]]
+    use_voice_mode: Optional[bool] = False
+    use_video_mode: Optional[bool] = False
     
 class FeedbackRequest(BaseModel):
     interview_id: str
@@ -148,6 +152,24 @@ async def generate_interview_questions(
                 detail="You have reached your monthly limit for interviews. Please upgrade your subscription."
             )
         
+        # Check if user has access to voice interviews if requested
+        if request.use_voice_mode:
+            voice_access = check_user_subscription_access(current_user["id"], "voice_interviews")
+            if not voice_access:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Voice interviews are only available for Pro users. Please upgrade your subscription."
+                )
+        
+        # Check if user has access to video interviews if requested
+        if request.use_video_mode:
+            video_access = check_user_subscription_access(current_user["id"], "video_interviews")
+            if not video_access:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Video interviews are only available for Pro users. Please upgrade your subscription."
+                )
+        
         # Generate a unique ID for this interview
         interview_id = str(uuid.uuid4())
         
@@ -191,7 +213,9 @@ async def generate_interview_questions(
         
         return {
             "interview_id": interview_id,
-            "questions": result["questions"]
+            "questions": result["questions"],
+            "use_voice_mode": request.use_voice_mode,
+            "use_video_mode": request.use_video_mode
         }
     except Exception as e:
         logger.error(f"Error in generate_interview_questions: {str(e)}", exc_info=True)
