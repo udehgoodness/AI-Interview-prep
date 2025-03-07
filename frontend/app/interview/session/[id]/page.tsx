@@ -1326,12 +1326,33 @@ Make sure your evaluation is specific to this candidate's actual answers and the
   const toggleRecording = async () => {
     // Prevent recording while AI is speaking
     if (isSpeaking) {
+      setError('Please wait for the AI to finish speaking before recording.');
+      setTimeout(() => setError(''), 3000);
+      return;
+    }
+    
+    // Prevent recording while processing audio
+    if (isProcessing) {
+      setError('Please wait for the audio to be processed before recording again.');
+      setTimeout(() => setError(''), 3000);
       return;
     }
     
     if (isRecording) {
       stopRecording();
     } else {
+      // If video is on, make sure we have access to the microphone
+      if (showVideo && (!localVideoRef.current || !localVideoRef.current.srcObject)) {
+        // Initialize WebRTC first to get microphone access
+        try {
+          await initializeWebRTC();
+        } catch (err) {
+          console.error('Error initializing WebRTC:', err);
+          setError('Failed to access microphone. Please check your permissions.');
+          return;
+        }
+      }
+      
       await startRecording();
     }
   };
@@ -1799,6 +1820,7 @@ Make sure your evaluation is specific to this candidate's actual answers and the
         return Promise.resolve();
       }
       
+      // Set speaking state immediately to provide visual feedback
       setIsSpeaking(true);
       
       // Get the access token
@@ -1821,6 +1843,11 @@ Make sure your evaluation is specific to this candidate's actual answers and the
       
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
+      }
+      
+      // Preload the audio element to reduce lag
+      if (audioRef.current) {
+        audioRef.current.preload = 'auto';
       }
       
       // Use a direct fetch to get the base64 audio data
@@ -1856,6 +1883,27 @@ Make sure your evaluation is specific to this candidate's actual answers and the
       if (audioRef.current) {
         // Set the audio source directly to the data URL
         audioRef.current.src = audioUrl;
+        
+        // Preload the audio to reduce lag
+        audioRef.current.load();
+        
+        audioRef.current.oncanplaythrough = () => {
+          console.log('Audio can play through without buffering');
+          // Play the audio once it's loaded
+          try {
+            const playPromise = audioRef.current?.play();
+            if (playPromise) {
+              playPromise.catch(err => {
+                console.error('Error playing audio:', err);
+                setIsSpeaking(false);
+              });
+            }
+          } catch (err) {
+            console.error('Error playing audio:', err);
+            setIsSpeaking(false);
+          }
+        };
+        
         audioRef.current.onplay = () => {
           console.log('Audio started playing');
           setIsSpeaking(true);
@@ -1870,41 +1918,6 @@ Make sure your evaluation is specific to this candidate's actual answers and the
           console.error('Audio playback error:', e);
           setIsSpeaking(false);
         };
-        
-        // Play the audio
-        try {
-          console.log('Attempting to play audio');
-          const playPromise = audioRef.current.play();
-          
-          if (playPromise !== undefined) {
-            playPromise
-              .then(() => {
-                console.log('Audio playback started successfully');
-              })
-              .catch(err => {
-                console.error('Error playing audio:', err);
-                // Try to play again with user interaction
-                console.log('Attempting to play audio after user interaction');
-                
-                // Create a one-time click handler to play audio after user interaction
-                const playAudioOnce = () => {
-                  if (audioRef.current) {
-                    audioRef.current.play()
-                      .then(() => console.log('Audio played after user interaction'))
-                      .catch(e => console.error('Still failed to play audio:', e));
-                  }
-                  document.removeEventListener('click', playAudioOnce);
-                };
-                
-                document.addEventListener('click', playAudioOnce, { once: true });
-                
-                setIsSpeaking(false);
-              });
-          }
-        } catch (err) {
-          console.error('Error playing audio:', err);
-          setIsSpeaking(false);
-        }
       } else {
         console.error('Audio element not found');
         setIsSpeaking(false);
@@ -2020,13 +2033,20 @@ Make sure your evaluation is specific to this candidate's actual answers and the
         
         // Save the current recording state
         const wasRecording = isRecording;
+        let recordingStream = null;
         
         // If recording, pause it temporarily without stopping tracks
         if (wasRecording && mediaRecorderRef.current) {
           try {
+            // Save the recording stream for later
+            recordingStream = mediaRecorderRef.current.stream;
+            console.log('Saved recording stream:', recordingStream.getTracks().map(t => t.kind).join(', '));
+            
             // Just pause the recorder without stopping tracks
-            mediaRecorderRef.current.pause();
-            console.log('Paused recording temporarily');
+            if (mediaRecorderRef.current.state === 'recording') {
+              mediaRecorderRef.current.pause();
+              console.log('Paused recording temporarily');
+            }
           } catch (err) {
             console.error('Error pausing recording:', err);
           }
@@ -2038,17 +2058,24 @@ Make sure your evaluation is specific to this candidate's actual answers and the
         setShowVideo(true);
         setIsVideoConnected(true);
         
-        // If we were recording, resume it
-        if (wasRecording && mediaRecorderRef.current) {
+        // If we were recording, resume it with the new stream
+        if (wasRecording) {
           try {
-            // Resume recording with a small delay
-            setTimeout(() => {
+            // Small delay to ensure everything is initialized
+            setTimeout(async () => {
+              // If we have a paused recorder, try to resume it
               if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'paused') {
-                mediaRecorderRef.current.resume();
-                console.log('Resumed recording');
-              } else if (!mediaRecorderRef.current || mediaRecorderRef.current.state === 'inactive') {
-                // If recorder was stopped, restart it
-                startRecording();
+                try {
+                  mediaRecorderRef.current.resume();
+                  console.log('Resumed recording');
+                } catch (resumeErr) {
+                  console.error('Error resuming recording:', resumeErr);
+                  // If resume fails, restart recording
+                  await startRecording();
+                }
+              } else {
+                // If recorder was stopped or not in paused state, restart it
+                await startRecording();
               }
             }, 500);
           } catch (err) {
@@ -2066,13 +2093,20 @@ Make sure your evaluation is specific to this candidate's actual answers and the
         
         // Save the current recording state
         const wasRecording = isRecording;
+        let recordingStream = null;
         
         // If recording, pause it temporarily without stopping tracks
         if (wasRecording && mediaRecorderRef.current) {
           try {
+            // Save the recording stream for later
+            recordingStream = mediaRecorderRef.current.stream;
+            console.log('Saved recording stream:', recordingStream.getTracks().map(t => t.kind).join(', '));
+            
             // Just pause the recorder without stopping tracks
-            mediaRecorderRef.current.pause();
-            console.log('Paused recording temporarily');
+            if (mediaRecorderRef.current.state === 'recording') {
+              mediaRecorderRef.current.pause();
+              console.log('Paused recording temporarily');
+            }
           } catch (err) {
             console.error('Error pausing recording:', err);
           }
@@ -2099,17 +2133,24 @@ Make sure your evaluation is specific to this candidate's actual answers and the
           localVideoRef.current.srcObject = null;
         }
         
-        // If we were recording, resume it
-        if (wasRecording && mediaRecorderRef.current) {
+        // If we were recording, resume it with the audio-only stream
+        if (wasRecording) {
           try {
-            // Resume recording with a small delay
-            setTimeout(() => {
+            // Small delay to ensure everything is initialized
+            setTimeout(async () => {
+              // If we have a paused recorder, try to resume it
               if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'paused') {
-                mediaRecorderRef.current.resume();
-                console.log('Resumed recording');
-              } else if (!mediaRecorderRef.current || mediaRecorderRef.current.state === 'inactive') {
-                // If recorder was stopped, restart it
-                startRecording();
+                try {
+                  mediaRecorderRef.current.resume();
+                  console.log('Resumed recording');
+                } catch (resumeErr) {
+                  console.error('Error resuming recording:', resumeErr);
+                  // If resume fails, restart recording
+                  await startRecording();
+                }
+              } else {
+                // If recorder was stopped or not in paused state, restart it
+                await startRecording();
               }
             }, 500);
           } catch (err) {
@@ -2434,12 +2475,11 @@ Make sure your evaluation is specific to this candidate's actual answers and the
                   <div className="mt-4 flex justify-center">
                     <button
                       onClick={toggleRecording}
-                      disabled={isSpeaking || isProcessing}
                       className={`px-4 py-2 rounded-full flex items-center ${
                         isRecording 
                           ? 'bg-red-600 text-white hover:bg-red-700' 
                           : 'bg-indigo-600 text-white hover:bg-indigo-700'
-                      } ${(isSpeaking || isProcessing) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      } ${(isSpeaking || isProcessing) ? 'opacity-50' : ''}`}
                     >
                       {isRecording ? (
                         <>
@@ -2521,12 +2561,11 @@ Make sure your evaluation is specific to this candidate's actual answers and the
                   <div className="mt-4 flex justify-center">
               <button
                       onClick={toggleRecording}
-                      disabled={isSpeaking || isProcessing}
                       className={`px-4 py-2 rounded-full flex items-center ${
                         isRecording 
                           ? 'bg-red-600 text-white hover:bg-red-700' 
                           : 'bg-indigo-600 text-white hover:bg-indigo-700'
-                      } ${(isSpeaking || isProcessing) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      } ${(isSpeaking || isProcessing) ? 'opacity-50' : ''}`}
                     >
                       {isRecording ? (
                         <>
