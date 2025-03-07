@@ -424,11 +424,7 @@ export default function InterviewSession({ params }: { params: { id: string } })
         return;
       }
       
-      // Check if we already have a media stream from recording
-      let existingAudioStream = null;
-      if (mediaRecorderRef.current && mediaRecorderRef.current.stream) {
-        existingAudioStream = mediaRecorderRef.current.stream;
-      }
+      console.log('Initializing WebRTC for video');
       
       // First, check if we already have a video stream
       if (localVideoRef.current && localVideoRef.current.srcObject) {
@@ -449,26 +445,47 @@ export default function InterviewSession({ params }: { params: { id: string } })
       
       console.log('Getting new video stream');
       
+      // Check if we already have a media stream from recording
+      let existingAudioStream = null;
+      if (mediaRecorderRef.current && mediaRecorderRef.current.stream) {
+        existingAudioStream = mediaRecorderRef.current.stream;
+        console.log('Found existing audio stream from recorder');
+      }
+      
       // Get user media (camera and microphone)
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
+      const constraints = {
         video: true,
         audio: !existingAudioStream // Only request audio if we don't already have it
-      });
+      };
+      
+      console.log('Requesting media with constraints:', constraints);
+      const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+      console.log('Got new media stream with tracks:', mediaStream.getTracks().map(t => t.kind).join(', '));
       
       // If we have an existing audio stream, add those tracks to our new stream
       if (existingAudioStream) {
+        console.log('Adding existing audio tracks to new stream');
+        
+        // Remove any existing audio tracks from the new stream to avoid duplicates
+        mediaStream.getAudioTracks().forEach(t => {
+          t.stop(); // Stop the track
+          mediaStream.removeTrack(t); // Remove it from the stream
+          console.log('Removed new audio track to avoid duplication');
+        });
+        
+        // Add the existing audio tracks to the new stream
         existingAudioStream.getAudioTracks().forEach(track => {
-          // Remove any existing audio tracks from the new stream to avoid duplicates
-          mediaStream.getAudioTracks().forEach(t => t.stop());
-          mediaStream.getAudioTracks().forEach(t => mediaStream.removeTrack(t));
-          
-          // Add the existing audio track
-          mediaStream.addTrack(track.clone());
+          // Clone the track to avoid affecting the original stream
+          const clonedTrack = track.clone();
+          mediaStream.addTrack(clonedTrack);
+          console.log('Added existing audio track to new stream');
         });
       }
       
+      // Set the stream to the video element
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = mediaStream;
+        console.log('Set new media stream to video element');
       }
 
       // Set video connected state
@@ -1326,31 +1343,53 @@ Make sure your evaluation is specific to this candidate's actual answers and the
       
       // Check if we already have a video stream with audio
       let stream: MediaStream;
+      
+      // If we have an existing media recorder, stop it first
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        try {
+          mediaRecorderRef.current.stop();
+          console.log('Stopped existing media recorder');
+        } catch (err) {
+          console.error('Error stopping existing media recorder:', err);
+        }
+      }
+      
       if (showVideo && localVideoRef.current && localVideoRef.current.srcObject) {
         console.log('Using existing video stream for recording');
         // Get the existing stream
         const existingStream = localVideoRef.current.srcObject as MediaStream;
         
-        // Create a new stream with only audio tracks to avoid affecting the video
-        stream = new MediaStream();
-        
         // Check if it has audio tracks
         if (existingStream.getAudioTracks().length > 0) {
-          // Use existing audio tracks
-          existingStream.getAudioTracks().forEach(track => {
-            // Clone the track to avoid affecting the original stream
-            stream.addTrack(track.clone());
-          });
+          // Use the existing stream directly if it has audio
+          console.log('Using existing stream with audio tracks');
+          stream = existingStream;
         } else {
           // If no audio tracks, get audio only without affecting the video
           try {
+            console.log('Getting new audio stream to add to existing video stream');
             const audioStream = await navigator.mediaDevices.getUserMedia({ 
               audio: true,
               video: false // Explicitly set video to false
             });
+            
+            // Create a new stream with both video and audio tracks
+            stream = new MediaStream();
+            
+            // Add all tracks from the existing stream
+            existingStream.getTracks().forEach(track => {
+              stream.addTrack(track);
+            });
+            
+            // Add audio tracks from the new stream
             audioStream.getAudioTracks().forEach(track => {
               stream.addTrack(track);
             });
+            
+            // Update the video element with the combined stream
+            if (localVideoRef.current) {
+              localVideoRef.current.srcObject = stream;
+            }
           } catch (err) {
             console.error('Error getting audio stream:', err);
             throw new Error('Failed to access microphone');
@@ -1358,6 +1397,7 @@ Make sure your evaluation is specific to this candidate's actual answers and the
         }
       } else {
         // Get a new audio stream if no video stream exists
+        console.log('Getting new audio-only stream for recording');
         // Explicitly request only audio to avoid triggering camera
         stream = await navigator.mediaDevices.getUserMedia({ 
           audio: true,
@@ -1365,7 +1405,9 @@ Make sure your evaluation is specific to this candidate's actual answers and the
         });
       }
       
-      const mediaRecorder = new MediaRecorder(stream);
+      // Create a new MediaRecorder with the stream
+      const options = { mimeType: 'audio/webm' };
+      const mediaRecorder = new MediaRecorder(stream, options);
       
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
@@ -1378,12 +1420,14 @@ Make sure your evaluation is specific to this candidate's actual answers and the
         await processAudio(audioBlob);
       };
       
+      // Start recording
       mediaRecorder.start();
       mediaRecorderRef.current = mediaRecorder;
       setIsRecording(true);
+      console.log('Started recording with MediaRecorder state:', mediaRecorder.state);
     } catch (err) {
       setError('Failed to access microphone. Please check your permissions.');
-      console.error(err);
+      console.error('Error starting recording:', err);
     }
   };
   
@@ -1391,20 +1435,54 @@ Make sure your evaluation is specific to this candidate's actual answers and the
   const stopRecording = () => {
     if (mediaRecorderRef.current && isRecording) {
       try {
-        mediaRecorderRef.current.stop();
+        console.log('Stopping recording with MediaRecorder state:', mediaRecorderRef.current.state);
+        
+        // Only stop if the recorder is active
+        if (mediaRecorderRef.current.state !== 'inactive') {
+          mediaRecorderRef.current.stop();
+          console.log('MediaRecorder stopped');
+        }
         
         // Only stop audio tracks from the recorder stream, not from the video stream
         if (mediaRecorderRef.current.stream) {
           // Create a separate reference to the recorder stream
           const recorderStream = mediaRecorderRef.current.stream;
           
-          // Only stop the audio tracks from the recorder stream
-          recorderStream.getAudioTracks().forEach(track => {
-            track.stop();
-            console.log(`Stopped audio track from recorder: ${track.kind}`);
-          });
+          // If we're not showing video, stop all tracks
+          if (!showVideo) {
+            recorderStream.getTracks().forEach(track => {
+              track.stop();
+              console.log(`Stopped track: ${track.kind}`);
+            });
+          } else {
+            // If we're showing video, only stop audio tracks that aren't used by the video
+            // First, get all audio tracks from the recorder stream
+            const audioTracks = recorderStream.getAudioTracks();
+            
+            // If we have a video stream, don't stop its audio tracks
+            if (localVideoRef.current && localVideoRef.current.srcObject) {
+              const videoStream = localVideoRef.current.srcObject as MediaStream;
+              const videoAudioTracks = videoStream.getAudioTracks();
+              
+              // Only stop audio tracks that aren't in the video stream
+              audioTracks.forEach(track => {
+                const isInVideoStream = videoAudioTracks.some(vTrack => vTrack.id === track.id);
+                if (!isInVideoStream) {
+                  track.stop();
+                  console.log(`Stopped audio track not used by video: ${track.id}`);
+                } else {
+                  console.log(`Kept audio track used by video: ${track.id}`);
+                }
+              });
+            } else {
+              // No video stream, stop all audio tracks
+              audioTracks.forEach(track => {
+                track.stop();
+                console.log(`Stopped audio track: ${track.id}`);
+              });
+            }
+          }
           
-          // Don't touch the video stream at all
           console.log('Kept video stream intact during recording stop');
         }
       } catch (err) {
@@ -1745,7 +1823,7 @@ Make sure your evaluation is specific to this candidate's actual answers and the
         headers['Authorization'] = `Bearer ${token}`;
       }
       
-      // Use a direct fetch with responseType: 'blob' to get binary data
+      // Use a direct fetch to get the base64 audio data
       const response = await fetch(`${API_BASE_URL}/api/text-to-speech`, {
         method: 'POST',
         headers,
@@ -1760,27 +1838,23 @@ Make sure your evaluation is specific to this candidate's actual answers and the
         throw new Error(`Failed to generate speech: ${response.status} ${response.statusText}`);
       }
       
-      // Get the response as a blob directly
-      const audioBlob = await response.blob();
-      console.log('Received audio blob:', audioBlob.size, 'bytes, type:', audioBlob.type);
+      // Get the response as JSON which contains the base64 audio data
+      const data = await response.json();
+      console.log('Received audio data response');
       
-      if (audioBlob.size === 0) {
-        console.error('Received empty audio blob');
+      if (!data || !data.audio) {
+        console.error('Received invalid audio data');
         setIsSpeaking(false);
         return Promise.resolve();
       }
       
-      // Create a URL for the blob
-      const audioUrl = URL.createObjectURL(audioBlob);
-      console.log('Created audio URL:', audioUrl);
+      // The audio data is already a data URL (data:audio/mp3;base64,...)
+      const audioUrl = data.audio;
+      console.log('Using audio URL from API response');
       
       // Use the existing audio element instead of creating a new one
       if (audioRef.current) {
-        // Clean up previous audio URL if it exists
-        if (audioRef.current.src) {
-          URL.revokeObjectURL(audioRef.current.src);
-        }
-        
+        // Set the audio source directly to the data URL
         audioRef.current.src = audioUrl;
         audioRef.current.onplay = () => {
           console.log('Audio started playing');
@@ -1790,13 +1864,11 @@ Make sure your evaluation is specific to this candidate's actual answers and the
         audioRef.current.onended = () => {
           console.log('Audio playback ended');
           setIsSpeaking(false);
-          URL.revokeObjectURL(audioUrl);
         };
         
         audioRef.current.onerror = (e) => {
           console.error('Audio playback error:', e);
           setIsSpeaking(false);
-          URL.revokeObjectURL(audioUrl);
         };
         
         // Play the audio
@@ -1814,7 +1886,7 @@ Make sure your evaluation is specific to this candidate's actual answers and the
                 // Try to play again with user interaction
                 console.log('Attempting to play audio after user interaction');
                 
-                // Set up a one-time click handler to play audio
+                // Create a one-time click handler to play audio after user interaction
                 const playAudioOnce = () => {
                   if (audioRef.current) {
                     audioRef.current.play()
@@ -1832,45 +1904,40 @@ Make sure your evaluation is specific to this candidate's actual answers and the
         } catch (err) {
           console.error('Error playing audio:', err);
           setIsSpeaking(false);
-          URL.revokeObjectURL(audioUrl);
+        }
+      } else {
+        console.error('Audio element not found');
+        setIsSpeaking(false);
+      }
+      
+      // Return a promise that resolves when the audio finishes playing
+      return new Promise((resolve) => {
+        if (!audioRef.current) {
+          setIsSpeaking(false);
+          resolve();
+          return;
         }
         
-        // Return a promise that resolves when the audio finishes playing
-        return new Promise<void>((resolve) => {
-          if (!audioRef.current) {
+        audioRef.current.onended = () => {
+          setIsSpeaking(false);
+          resolve();
+        };
+        
+        audioRef.current.onerror = () => {
+          setIsSpeaking(false);
+          resolve();
+        };
+        
+        // Set a timeout to prevent hanging
+        setTimeout(() => {
+          if (isSpeaking) {
             setIsSpeaking(false);
             resolve();
-            return;
           }
-          
-          audioRef.current.onended = () => {
-            setIsSpeaking(false);
-            URL.revokeObjectURL(audioUrl);
-            resolve();
-          };
-          
-          audioRef.current.onerror = () => {
-            setIsSpeaking(false);
-            URL.revokeObjectURL(audioUrl);
-            resolve();
-          };
-          
-          // Set a timeout to prevent hanging
-          setTimeout(() => {
-            if (isSpeaking) {
-              setIsSpeaking(false);
-              URL.revokeObjectURL(audioUrl);
-              resolve();
-            }
-          }, 30000); // 30 seconds max
-        });
-      } else {
-        console.error('Audio element reference is null');
-        setIsSpeaking(false);
-        return Promise.resolve();
-      }
+        }, 30000); // 30 second timeout
+      });
     } catch (err) {
-      console.error('Failed to speak message:', err);
+      console.error('Error in speakMessage:', err);
       setIsSpeaking(false);
       return Promise.resolve();
     }
@@ -1954,9 +2021,15 @@ Make sure your evaluation is specific to this candidate's actual answers and the
         // Save the current recording state
         const wasRecording = isRecording;
         
-        // If recording, stop it temporarily
-        if (wasRecording) {
-          stopRecording();
+        // If recording, pause it temporarily without stopping tracks
+        if (wasRecording && mediaRecorderRef.current) {
+          try {
+            // Just pause the recorder without stopping tracks
+            mediaRecorderRef.current.pause();
+            console.log('Paused recording temporarily');
+          } catch (err) {
+            console.error('Error pausing recording:', err);
+          }
         }
         
         await initializeWebRTC();
@@ -1965,12 +2038,22 @@ Make sure your evaluation is specific to this candidate's actual answers and the
         setShowVideo(true);
         setIsVideoConnected(true);
         
-        // If we were recording, restart it
-        if (wasRecording) {
-          // Small delay to ensure everything is initialized
-          setTimeout(async () => {
-            await startRecording();
-          }, 500);
+        // If we were recording, resume it
+        if (wasRecording && mediaRecorderRef.current) {
+          try {
+            // Resume recording with a small delay
+            setTimeout(() => {
+              if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'paused') {
+                mediaRecorderRef.current.resume();
+                console.log('Resumed recording');
+              } else if (!mediaRecorderRef.current || mediaRecorderRef.current.state === 'inactive') {
+                // If recorder was stopped, restart it
+                startRecording();
+              }
+            }, 500);
+          } catch (err) {
+            console.error('Error resuming recording:', err);
+          }
         }
       } catch (err) {
         console.error('Failed to initialize WebRTC:', err);
@@ -1984,9 +2067,15 @@ Make sure your evaluation is specific to this candidate's actual answers and the
         // Save the current recording state
         const wasRecording = isRecording;
         
-        // If recording, stop it temporarily
-        if (wasRecording) {
-          stopRecording();
+        // If recording, pause it temporarily without stopping tracks
+        if (wasRecording && mediaRecorderRef.current) {
+          try {
+            // Just pause the recorder without stopping tracks
+            mediaRecorderRef.current.pause();
+            console.log('Paused recording temporarily');
+          } catch (err) {
+            console.error('Error pausing recording:', err);
+          }
         }
         
         const stream = localVideoRef.current.srcObject as MediaStream;
@@ -2010,12 +2099,22 @@ Make sure your evaluation is specific to this candidate's actual answers and the
           localVideoRef.current.srcObject = null;
         }
         
-        // If we were recording, restart it
-        if (wasRecording) {
-          // Small delay to ensure everything is initialized
-          setTimeout(async () => {
-            await startRecording();
-          }, 500);
+        // If we were recording, resume it
+        if (wasRecording && mediaRecorderRef.current) {
+          try {
+            // Resume recording with a small delay
+            setTimeout(() => {
+              if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'paused') {
+                mediaRecorderRef.current.resume();
+                console.log('Resumed recording');
+              } else if (!mediaRecorderRef.current || mediaRecorderRef.current.state === 'inactive') {
+                // If recorder was stopped, restart it
+                startRecording();
+              }
+            }, 500);
+          } catch (err) {
+            console.error('Error resuming recording:', err);
+          }
         }
       }
       
