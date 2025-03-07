@@ -271,4 +271,39 @@ class AIService:
             return None
         except Exception as e:
             logger.error(f"Error in speech_to_text: {str(e)}")
+            return None
+
+    async def text_to_speech(self, text: str, voice: str = "alloy", model: str = "openai") -> Optional[bytes]:
+        """
+        Convert text to speech using OpenAI with DeepSeek fallback
+        """
+        try:
+            logger.info(f"Converting text to speech using {model}")
+            
+            # If model is explicitly set to deepseek, use DeepSeek directly
+            if model.lower() == "deepseek":
+                audio_data = await self.deepseek_service.text_to_speech(text, voice)
+                if audio_data:
+                    logger.info("Successfully converted text to speech using DeepSeek")
+                    return audio_data
+                logger.error("Failed to convert text to speech with DeepSeek")
+                return None
+            
+            # Otherwise, try OpenAI first
+            audio_data = await self.openai_service.text_to_speech(text, voice)
+            if audio_data:
+                logger.info("Successfully converted text to speech using OpenAI")
+                return audio_data
+            
+            # If OpenAI fails, fall back to DeepSeek
+            logger.warning("OpenAI failed to convert text to speech, falling back to DeepSeek")
+            audio_data = await self.deepseek_service.text_to_speech(text, voice)
+            if audio_data:
+                logger.info("Successfully converted text to speech using DeepSeek fallback")
+                return audio_data
+            
+            logger.error("Both OpenAI and DeepSeek failed to convert text to speech")
+            return None
+        except Exception as e:
+            logger.error(f"Error in text_to_speech: {str(e)}")
             return None 

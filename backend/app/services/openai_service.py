@@ -284,4 +284,28 @@ class OpenAIService:
             return response.choices[0].message.content
         except Exception as e:
             logger.error(f"Error calling OpenAI API: {str(e)}")
+            return None
+
+    async def text_to_speech(self, text: str, voice: str = "alloy") -> Optional[bytes]:
+        """
+        Convert text to speech using OpenAI's TTS API
+        """
+        try:
+            logger.info(f"Converting text to speech using OpenAI TTS with voice: {voice}")
+            
+            # The OpenAI client methods are not async by default in the latest version
+            # So we don't use await here
+            response = self.client.audio.speech.create(
+                model="tts-1",  # Use the text-to-speech model
+                voice=voice,    # alloy, echo, fable, onyx, nova, or shimmer
+                input=text
+            )
+            
+            # Get the audio content as bytes
+            audio_data = response.content
+            
+            logger.info("Successfully generated audio with OpenAI TTS")
+            return audio_data
+        except Exception as e:
+            logger.error(f"Error using OpenAI TTS: {str(e)}")
             return None 

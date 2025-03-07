@@ -430,6 +430,25 @@ export default function InterviewSession({ params }: { params: { id: string } })
         existingAudioStream = mediaRecorderRef.current.stream;
       }
       
+      // First, check if we already have a video stream
+      if (localVideoRef.current && localVideoRef.current.srcObject) {
+        const currentStream = localVideoRef.current.srcObject as MediaStream;
+        const hasVideoTracks = currentStream.getVideoTracks().length > 0;
+        
+        // If we already have video tracks, just ensure they're enabled
+        if (hasVideoTracks) {
+          currentStream.getVideoTracks().forEach(track => {
+            track.enabled = true;
+          });
+          
+          console.log('Reusing existing video stream');
+          setIsVideoConnected(true);
+          return;
+        }
+      }
+      
+      console.log('Getting new video stream');
+      
       // Get user media (camera and microphone)
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         video: true,
@@ -439,7 +458,12 @@ export default function InterviewSession({ params }: { params: { id: string } })
       // If we have an existing audio stream, add those tracks to our new stream
       if (existingAudioStream) {
         existingAudioStream.getAudioTracks().forEach(track => {
-          mediaStream.addTrack(track);
+          // Remove any existing audio tracks from the new stream to avoid duplicates
+          mediaStream.getAudioTracks().forEach(t => t.stop());
+          mediaStream.getAudioTracks().forEach(t => mediaStream.removeTrack(t));
+          
+          // Add the existing audio track
+          mediaStream.addTrack(track.clone());
         });
       }
       
@@ -761,20 +785,6 @@ export default function InterviewSession({ params }: { params: { id: string } })
         console.error('Error during global media cleanup:', err);
       }
       
-      // Additional cleanup for any getUserMedia streams that might be cached
-      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        try {
-          // This is a trick to force the browser to release camera permissions
-          const emptyStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-          emptyStream.getTracks().forEach(track => {
-            track.stop();
-            console.log(`Stopped empty stream track: ${track.kind}`);
-          });
-        } catch (err) {
-          console.log('No additional media streams to clean up');
-        }
-      }
-      
       // Format answers for submission
       const formattedAnswers = interviewData.questions.map(question => ({
         question_id: question.id,
@@ -907,6 +917,38 @@ export default function InterviewSession({ params }: { params: { id: string } })
     
     // If all answers are empty or nonsensical, force a score of 0
     const forceZeroScore = hasEmptyAnswers || hasNonsensicalAnswers;
+    
+    // If all answers are empty, use a predefined evaluation instead of trying to generate one
+    if (forceZeroScore) {
+      console.log('Using predefined evaluation for empty or nonsensical answers');
+      
+      const emptyEvaluation = {
+        interviewId: interviewData?.id,
+        jobTitle: interviewData?.jobTitle,
+        interviewType: interviewData?.interviewType,
+        timestamp: new Date().toISOString(),
+        score: 0,
+        feedback: "The answers provided are empty, making it impossible to evaluate the candidate's knowledge and reasoning skills for the position.",
+        strengths: [],
+        weaknesses: [
+          "No answers provided",
+          "Lack of demonstration of technical knowledge",
+          "Inability to articulate troubleshooting processes"
+        ],
+        improvement_areas: [
+          "Provide detailed answers to interview questions",
+          "Showcase problem-solving and technical skills",
+          "Explain concepts clearly and concisely"
+        ],
+        answers: formattedAnswers,
+        questions: interviewData?.questions
+      };
+      
+      // Store the evaluation
+      localStorage.setItem(`interviewEvaluation_${interviewData?.id}`, JSON.stringify(emptyEvaluation));
+      localStorage.setItem('latestInterviewEvaluation', interviewData?.id || '');
+      return;
+    }
     
     try {
       // Create a more detailed prompt for evaluation that includes the specific job and answers
@@ -1286,22 +1328,26 @@ Make sure your evaluation is specific to this candidate's actual answers and the
       let stream: MediaStream;
       if (showVideo && localVideoRef.current && localVideoRef.current.srcObject) {
         console.log('Using existing video stream for recording');
-        // Clone the existing stream to avoid modifying it directly
+        // Get the existing stream
         const existingStream = localVideoRef.current.srcObject as MediaStream;
         
-        // Create a new stream with only audio tracks
+        // Create a new stream with only audio tracks to avoid affecting the video
         stream = new MediaStream();
         
         // Check if it has audio tracks
         if (existingStream.getAudioTracks().length > 0) {
           // Use existing audio tracks
           existingStream.getAudioTracks().forEach(track => {
+            // Clone the track to avoid affecting the original stream
             stream.addTrack(track.clone());
           });
         } else {
-          // If no audio tracks, get audio only
+          // If no audio tracks, get audio only without affecting the video
           try {
-            const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const audioStream = await navigator.mediaDevices.getUserMedia({ 
+              audio: true,
+              video: false // Explicitly set video to false
+            });
             audioStream.getAudioTracks().forEach(track => {
               stream.addTrack(track);
             });
@@ -1312,7 +1358,11 @@ Make sure your evaluation is specific to this candidate's actual answers and the
         }
       } else {
         // Get a new audio stream if no video stream exists
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // Explicitly request only audio to avoid triggering camera
+        stream = await navigator.mediaDevices.getUserMedia({ 
+          audio: true,
+          video: false // Explicitly set video to false
+        });
       }
       
       const mediaRecorder = new MediaRecorder(stream);
@@ -1343,11 +1393,19 @@ Make sure your evaluation is specific to this candidate's actual answers and the
       try {
         mediaRecorderRef.current.stop();
         
-        // Only stop audio tracks, not video tracks
+        // Only stop audio tracks from the recorder stream, not from the video stream
         if (mediaRecorderRef.current.stream) {
-          mediaRecorderRef.current.stream.getAudioTracks().forEach(track => {
+          // Create a separate reference to the recorder stream
+          const recorderStream = mediaRecorderRef.current.stream;
+          
+          // Only stop the audio tracks from the recorder stream
+          recorderStream.getAudioTracks().forEach(track => {
             track.stop();
+            console.log(`Stopped audio track from recorder: ${track.kind}`);
           });
+          
+          // Don't touch the video stream at all
+          console.log('Kept video stream intact during recording stop');
         }
       } catch (err) {
         console.error('Error stopping recording:', err);
@@ -1892,10 +1950,28 @@ Make sure your evaluation is specific to this candidate's actual answers and the
       // First initialize WebRTC, then set the state
       try {
         console.log('Initializing WebRTC before showing video');
+        
+        // Save the current recording state
+        const wasRecording = isRecording;
+        
+        // If recording, stop it temporarily
+        if (wasRecording) {
+          stopRecording();
+        }
+        
         await initializeWebRTC();
+        
         // Only set showVideo to true if initialization was successful
         setShowVideo(true);
         setIsVideoConnected(true);
+        
+        // If we were recording, restart it
+        if (wasRecording) {
+          // Small delay to ensure everything is initialized
+          setTimeout(async () => {
+            await startRecording();
+          }, 500);
+        }
       } catch (err) {
         console.error('Failed to initialize WebRTC:', err);
         setError('Failed to access camera. Please check your permissions.');
@@ -1904,6 +1980,15 @@ Make sure your evaluation is specific to this candidate's actual answers and the
       // If turning video off, only stop video tracks but keep audio tracks active
       if (localVideoRef.current && localVideoRef.current.srcObject) {
         console.log('Stopping video tracks before hiding video');
+        
+        // Save the current recording state
+        const wasRecording = isRecording;
+        
+        // If recording, stop it temporarily
+        if (wasRecording) {
+          stopRecording();
+        }
+        
         const stream = localVideoRef.current.srcObject as MediaStream;
         
         // Only stop video tracks, keep audio tracks for recording
@@ -1924,38 +2009,17 @@ Make sure your evaluation is specific to this candidate's actual answers and the
         } else {
           localVideoRef.current.srcObject = null;
         }
+        
+        // If we were recording, restart it
+        if (wasRecording) {
+          // Small delay to ensure everything is initialized
+          setTimeout(async () => {
+            await startRecording();
+          }, 500);
+        }
       }
       
-      // Additional cleanup to ensure all video tracks are stopped
-      try {
-        const videoElements = document.querySelectorAll('video');
-        videoElements.forEach(element => {
-          if (element.srcObject && element !== localVideoRef.current) {
-            const stream = element.srcObject as MediaStream;
-            if (stream) {
-              // Only stop video tracks, keep audio tracks
-              stream.getTracks().forEach(track => {
-                if (track.kind === 'video') {
-                  track.stop();
-                  console.log(`Additional cleanup: Stopped video track: ${track.kind}`);
-                }
-              });
-              
-              // Keep audio tracks if they exist
-              const audioTracks = stream.getAudioTracks();
-              if (audioTracks.length > 0) {
-                const audioStream = new MediaStream(audioTracks);
-                element.srcObject = audioStream;
-              } else {
-                element.srcObject = null;
-              }
-            }
-          }
-        });
-      } catch (err) {
-        console.error('Error during additional video cleanup:', err);
-      }
-      
+      // Set the state after handling the stream
       setShowVideo(false);
       setIsVideoConnected(false);
     }

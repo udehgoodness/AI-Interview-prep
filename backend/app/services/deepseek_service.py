@@ -293,4 +293,45 @@ class DeepSeekService:
                         
         except Exception as e:
             logger.error(f"Error in speech_to_text: {str(e)}", exc_info=True)
+            return None
+
+    async def text_to_speech(self, text: str, voice: str = "alloy") -> Optional[bytes]:
+        """
+        Convert text to speech using a fallback method
+        
+        Note: DeepSeek doesn't have a native TTS API, so we're using a fallback approach
+        that returns a simple audio file with a message about using OpenAI's TTS instead.
+        """
+        try:
+            logger.info(f"DeepSeek doesn't support TTS natively, using fallback")
+            
+            # Since DeepSeek doesn't have a TTS API, we'll use a fallback
+            # In a production environment, you might want to use another TTS service
+            
+            # For now, we'll create a simple message using a third-party TTS library
+            # or return a pre-recorded audio file
+            
+            # This is a placeholder implementation
+            # In a real implementation, you would use a proper TTS service
+            
+            # For testing purposes, we'll return a simple audio file
+            # with a message about using OpenAI's TTS instead
+            
+            # Import the required libraries
+            from gtts import gTTS
+            import io
+            
+            # Create a text-to-speech object
+            tts = gTTS(text="This is a fallback text-to-speech service. The actual message was: " + text[:100], lang="en")
+            
+            # Save the audio to a bytes buffer
+            audio_buffer = io.BytesIO()
+            tts.write_to_fp(audio_buffer)
+            audio_buffer.seek(0)
+            
+            # Return the audio data
+            return audio_buffer.read()
+            
+        except Exception as e:
+            logger.error(f"Error in text_to_speech fallback: {str(e)}", exc_info=True)
             return None 
