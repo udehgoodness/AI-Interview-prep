@@ -402,58 +402,84 @@ def check_user_subscription_access(user_id: int, feature_name: str):
 
 def update_subscription_plan_features():
     """
-    Update subscription plan features
-    This function is called on application startup to ensure all plans have the required features
+    Update subscription plan features in the database
     """
-    # Define the default features for each plan
-    default_features = {
-        "free": {
-            "interviews_per_month": 3,
+    try:
+        from app.database.db import execute_query
+        
+        # Check if subscription_plans table exists
+        check_table_query = """
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_name = 'subscription_plans'
+        );
+        """
+        
+        result = execute_query(check_table_query)
+        if not result or not result[0]['exists']:
+            logger.warning("subscription_plans table does not exist, skipping update")
+            return
+        
+        # Update free plan features
+        free_plan_features = {
+            "interviews_per_month": 5,
+            "text_interviews": True,
             "voice_interviews": False,
+            "video_interviews": False,
             "code_challenges": False,
-            "resume_analysis": False,
-            "interview_feedback": True,
-            "interview_recording": False,
-            "custom_questions": False,
-            "ai_model": "basic"
-        },
-        "basic": {
-            "interviews_per_month": 10,
-            "voice_interviews": True,
-            "code_challenges": True,
-            "resume_analysis": True,
-            "interview_feedback": True,
-            "interview_recording": True,
-            "custom_questions": False,
-            "ai_model": "standard"
-        },
-        "premium": {
-            "interviews_per_month": -1,  # Unlimited
-            "voice_interviews": True,
-            "code_challenges": True,
-            "resume_analysis": True,
-            "interview_feedback": True,
-            "interview_recording": True,
-            "custom_questions": True,
-            "ai_model": "advanced"
+            "feedback_detail": "basic",
+            "interview_duration_max": 30
         }
-    }
-    
-    # Get all plans
-    plans = get_all_subscription_plans(active_only=False)
-    
-    for plan in plans:
-        plan_name = plan["name"].lower()
         
-        # Skip plans that don't match our default plans
-        if plan_name not in default_features:
-            continue
+        # Update basic plan features
+        basic_plan_features = {
+            "interviews_per_month": 20,
+            "text_interviews": True,
+            "voice_interviews": True,
+            "video_interviews": False,
+            "code_challenges": True,
+            "feedback_detail": "detailed",
+            "interview_duration_max": 60
+        }
         
-        # Get the default features for this plan
-        features = default_features[plan_name]
+        # Update pro plan features
+        pro_plan_features = {
+            "interviews_per_month": 50,
+            "text_interviews": True,
+            "voice_interviews": True,
+            "video_interviews": True,
+            "code_challenges": True,
+            "feedback_detail": "comprehensive",
+            "interview_duration_max": 90
+        }
         
-        # Update the plan features
-        update_subscription_plan(
-            plan["id"],
-            SubscriptionPlanUpdate(features=features)
-        ) 
+        # Update free plan
+        update_free_plan_query = """
+        UPDATE subscription_plans
+        SET features = %s
+        WHERE name = 'free';
+        """
+        
+        # Update basic plan
+        update_basic_plan_query = """
+        UPDATE subscription_plans
+        SET features = %s
+        WHERE name = 'basic';
+        """
+        
+        # Update pro plan
+        update_pro_plan_query = """
+        UPDATE subscription_plans
+        SET features = %s
+        WHERE name = 'pro';
+        """
+        
+        # Execute queries
+        execute_query(update_free_plan_query, (json.dumps(free_plan_features),), fetch=False)
+        execute_query(update_basic_plan_query, (json.dumps(basic_plan_features),), fetch=False)
+        execute_query(update_pro_plan_query, (json.dumps(pro_plan_features),), fetch=False)
+        
+        logger.info("Subscription plan features updated successfully")
+    except Exception as e:
+        logger.error(f"Error updating subscription plan features: {str(e)}")
+        raise 

@@ -43,13 +43,21 @@ export default function Login() {
     setError('');
     
     try {
+      // Make login request
       const response = await axios.post(
         `${process.env.NEXT_PUBLIC_API_URL}/api/auth/login`,
         { email, password }
       );
       
+      // Store token directly in localStorage
+      const token = response.data.access_token;
+      const userData = response.data.user;
+      
+      localStorage.setItem('token', token);
+      localStorage.setItem('user', JSON.stringify(userData));
+      
       // Use the setAuthState function to update auth context
-      await setAuthState(response.data.access_token, response.data.user);
+      await setAuthState(token, userData);
       
       // Redirect to home or the redirect URL
       const redirectUrl = searchParams.get('redirect') || '/';

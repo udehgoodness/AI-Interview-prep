@@ -54,6 +54,9 @@ export default function InterviewSession({ params }: { params: { id: string } })
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [answeredQuestions, setAnsweredQuestions] = useState<Set<string>>(new Set());
   const [voiceModeEnabled, setVoiceModeEnabled] = useState(false);
+  const [timeWarningShown, setTimeWarningShown] = useState(false);
+  const [timeUpMessageShown, setTimeUpMessageShown] = useState(false);
+  const [finalMessageSpoken, setFinalMessageSpoken] = useState(false);
   
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -63,81 +66,88 @@ export default function InterviewSession({ params }: { params: { id: string } })
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const conversationContainerRef = useRef<HTMLDivElement>(null);
+  const localVideoStreamRef = useRef<MediaStream | null>(null);
+  const audioStreamRef = useRef<MediaStream | null>(null);
 
   // Load interview data from localStorage
   useEffect(() => {
-    try {
-      // First check if we have the interview data in localStorage
-      const storedData = localStorage.getItem('currentInterview');
-      if (!storedData) {
-        setError('Interview data not found. Please set up a new interview.');
-        return;
-      }
-
-      const parsedData = JSON.parse(storedData);
-      if (parsedData.id !== params.id) {
-        setError('Interview ID mismatch. Please set up a new interview.');
-        return;
-      }
-
-      console.log('Loading interview data:', parsedData);
-      setInterviewData(parsedData);
-      
-      // Set voice mode based on interview data
-      setVoiceModeEnabled(parsedData.useVoiceMode === true);
-      
-      // Check if we have a stored question index for this interview
-      const storedQuestionIndex = localStorage.getItem(`interview_question_${params.id}`);
-      if (storedQuestionIndex) {
-        setCurrentQuestionIndex(parseInt(storedQuestionIndex, 10));
-      }
-      
-      // Check if we have a stored timer value for this interview
-      const storedTimerData = localStorage.getItem(`interview_timer_${params.id}`);
-      
-      if (storedTimerData) {
-        // If we have stored timer data, use it
-        const { remainingTime, lastUpdated } = JSON.parse(storedTimerData);
-        
-        // Calculate how much time has passed since the timer was last updated
-        const timeElapsed = Math.floor((Date.now() - lastUpdated) / 1000);
-        
-        // Calculate the new remaining time, ensuring it doesn't go below 0
-        const newTimeLeft = Math.max(0, remainingTime - timeElapsed);
-        
-        // Set the timer to the calculated value
-        setTimeLeft(newTimeLeft);
-        
-        // If time is up, handle it
-        if (newTimeLeft === 0) {
-          handleTimeUp();
+    const loadInterviewData = async () => {
+      try {
+        // First check if we have the interview data in localStorage
+        const storedData = localStorage.getItem('currentInterview');
+        if (!storedData) {
+          setError('Interview data not found. Please set up a new interview.');
+          return;
         }
-      } else {
-        // If no stored timer data, initialize with the full duration
-        setTimeLeft(parsedData.duration * 60); // Convert minutes to seconds
-      }
-      
-      // Set video state based on useVideoMode setting
-      setShowVideo(parsedData.useVideoMode === true);
-      
-      // Initialize answers object
-      const initialAnswers: Record<string, string> = {};
-      parsedData.questions.forEach((q: Question) => {
-        initialAnswers[q.id] = '';
-      });
-      setAnswers(initialAnswers);
-
-      // Initialize messages with first question for both voice and text mode
-      if (messages.length === 0) {
-        // Check if we already have a greeting message to prevent duplication
-        const hasGreeting = messages.some(msg => 
-          msg.role === 'assistant' && 
-          (msg.content.toLowerCase().includes('hello') || 
-           msg.content.toLowerCase().includes('hi') ||
-           msg.content.toLowerCase().includes('welcome'))
-        );
         
-        if (!hasGreeting) {
+        const parsedData = JSON.parse(storedData);
+        if (parsedData.id !== params.id) {
+          setError('Interview ID mismatch. Please set up a new interview.');
+          return;
+        }
+
+        console.log('Loading interview data:', parsedData);
+        setInterviewData(parsedData);
+        
+        // Check if time's up message has been shown
+        const timeUpShown = localStorage.getItem(`time_up_shown_${parsedData.id}`);
+        if (timeUpShown) {
+          setTimeUpMessageShown(true);
+        }
+        
+        // Check if final message has been spoken
+        const finalMessageSpokenFromStorage = localStorage.getItem(`final_message_spoken_${parsedData.id}`);
+        if (finalMessageSpokenFromStorage) {
+          setFinalMessageSpoken(true);
+        }
+        
+        // Set voice mode based on interview data
+        setVoiceModeEnabled(parsedData.useVoiceMode === true);
+        
+        // Check if we have a stored question index for this interview
+        const storedQuestionIndex = localStorage.getItem(`interview_question_${params.id}`);
+        if (storedQuestionIndex) {
+          setCurrentQuestionIndex(parseInt(storedQuestionIndex, 10));
+        }
+        
+        // Check if we have a stored timer value for this interview
+        const storedTimerData = localStorage.getItem(`interview_timer_${params.id}`);
+        
+        if (storedTimerData) {
+          // If we have stored timer data, use it
+          const { remainingTime, lastUpdated } = JSON.parse(storedTimerData);
+          
+          // Calculate how much time has passed since the timer was last updated
+          const timeElapsed = Math.floor((Date.now() - lastUpdated) / 1000);
+          
+          // Calculate the new remaining time, ensuring it doesn't go below 0
+          const newTimeLeft = Math.max(0, remainingTime - timeElapsed);
+          
+          // Set the timer to the calculated value
+          setTimeLeft(newTimeLeft);
+          
+          // If time is up, handle it
+          if (newTimeLeft === 0) {
+            handleTimeUp();
+          }
+        } else {
+          // If no stored timer data, initialize with the full duration
+          setTimeLeft(parsedData.duration * 60); // Convert minutes to seconds
+        }
+        
+        // Set video state based on useVideoMode setting
+        setShowVideo(parsedData.useVideoMode === true);
+        
+        // Initialize answers object
+        const initialAnswers: Record<string, string> = {};
+        parsedData.questions.forEach((q: Question) => {
+          initialAnswers[q.id] = '';
+        });
+        setAnswers(initialAnswers);
+
+        // Initialize messages with first question for both voice and text mode
+        // Only do this if messages is empty (first load)
+        if (messages.length === 0) {
           let initialMessage;
           
           if (parsedData.useVoiceMode) {
@@ -154,71 +164,110 @@ export default function InterviewSession({ params }: { params: { id: string } })
             };
           }
           
+          // Set the messages state with the initial message
           setMessages([initialMessage]);
           
           // Play the greeting message if voice mode is enabled
-          if (parsedData.useVoiceMode) {
-            // Use setTimeout to ensure the component is fully mounted before playing audio
-            setTimeout(() => {
-              speakMessage(initialMessage.content).catch(err => {
-                console.error('Error playing greeting message:', err);
-              });
-            }, 1000);
-          }
+          // Use a separate useEffect for this to avoid re-renders
         }
+      } catch (err) {
+        console.error('Error loading interview data:', err);
+        setError('Failed to load interview data. Please set up a new interview.');
       }
-    } catch (err) {
-      console.error('Error loading interview data:', err);
-      setError('Failed to load interview data. Please set up a new interview.');
-    }
+    };
+    
+    loadInterviewData();
   }, [params.id]);
+
+  // Separate effect for playing the greeting message
+  useEffect(() => {
+    // Only run this effect if we have interview data and messages
+    if (!interviewData || messages.length === 0) return;
+    
+    // Only play greeting for voice mode
+    if (interviewData.useVoiceMode) {
+      // Check if we've already played the greeting for this interview
+      const greetingPlayed = localStorage.getItem(`greeting_played_${interviewData.id}`);
+      
+      if (!greetingPlayed) {
+        // Mark that we've played the greeting immediately to prevent duplicates
+        localStorage.setItem(`greeting_played_${interviewData.id}`, 'true');
+        
+        // Use setTimeout to ensure the component is fully mounted before playing audio
+        setTimeout(() => {
+          // Get the first message which should be the greeting
+          const initialMessage = messages[0];
+          if (initialMessage && initialMessage.role === 'assistant') {
+            speakMessage(initialMessage.content).catch(err => {
+              console.error('Error playing greeting message:', err);
+            });
+          }
+        }, 1000);
+      }
+    }
+  }, [interviewData, messages]);
 
   // Add audio ended event listener
   useEffect(() => {
-    const audioElement = audioRef.current;
-    
-    const handleAudioEnded = () => {
-      // Audio has finished playing
-      console.log('Audio playback completed');
-    };
-    
-    if (audioElement) {
-      audioElement.addEventListener('ended', handleAudioEnded);
-    }
-    
-    return () => {
-      if (audioElement) {
-        audioElement.removeEventListener('ended', handleAudioEnded);
-      }
-    };
+    // This effect is no longer needed as we're using the onEnded prop on the audio element
+    // The handleAudioEnded function is defined below and used directly in the audio element
   }, []);
 
   // Timer countdown
   useEffect(() => {
     if (timeLeft > 0 && interviewData) {
       timerRef.current = setInterval(() => {
-        setTimeLeft((prev) => {
-          // Store the current timer state in localStorage
+        setTimeLeft(prev => {
+          // Store the updated timer value in localStorage
           localStorage.setItem(`interview_timer_${interviewData.id}`, JSON.stringify({
-            remainingTime: prev,
+            remainingTime: prev - 1,
             lastUpdated: Date.now()
           }));
           
-          // When time is up, handle the end of interview
-          if (prev <= 1) {
-            clearInterval(timerRef.current as NodeJS.Timeout);
-            handleTimeUp();
-            return 0;
+          // Show time warning when 2 minutes are left (exactly 120 seconds)
+          if (prev === 121) { // Check at 121 so it triggers when changing to 120
+            console.log("Triggering time warning at 2 minutes remaining");
+            
+            // Check if time warning has already been handled
+            const timeWarningHandledKey = `interview_time_warning_handled_${interviewData.id}`;
+            const timeWarningHandled = localStorage.getItem(timeWarningHandledKey) === 'true';
+            
+            if (!timeWarningHandled && !isSubmitting && !isSpeaking && !isProcessing) {
+              handleTimeWarning();
+            } else {
+              console.log("Skipping time warning - already handled or busy state");
+            }
           }
           
-          // When there's only 1 minute left, send a time warning
-          if (prev === 60 && interviewData.useVoiceMode) {
-            handleTimeWarning();
+          // Handle time up when timer reaches 0
+          if (prev === 1) {
+            console.log("Triggering time up at 0 seconds remaining");
+            
+            // Check if time up has already been handled
+            const timeUpHandledKey = `interview_time_up_handled_${interviewData.id}`;
+            const timeUpHandled = localStorage.getItem(timeUpHandledKey) === 'true';
+            
+            if (!timeUpHandled && !isSubmitting) {
+              handleTimeUp();
+            } else {
+              console.log("Skipping time up - already handled or submitting");
+            }
           }
           
           return prev - 1;
         });
       }, 1000);
+    } else if (timeLeft === 0 && interviewData) {
+      // Check if time up has already been handled
+      const timeUpHandledKey = `interview_time_up_handled_${interviewData.id}`;
+      const timeUpHandled = localStorage.getItem(timeUpHandledKey) === 'true';
+      
+      if (!timeUpHandled && !isSubmitting) {
+        console.log("Triggering time up at timeLeft === 0");
+        handleTimeUp();
+      } else {
+        console.log("Skipping time up at timeLeft === 0 - already handled or submitting");
+      }
     }
 
     return () => {
@@ -226,195 +275,169 @@ export default function InterviewSession({ params }: { params: { id: string } })
         clearInterval(timerRef.current);
       }
     };
-  }, [timeLeft, interviewData]);
+  }, [timeLeft, interviewData, isSubmitting, isSpeaking, isProcessing]);
 
-  // Handle time warning when 1 minute is left
+  // Handle time warning when 2 minutes are left
   const handleTimeWarning = async () => {
-    if (!interviewData || !interviewData.useVoiceMode) return;
+    if (!interviewData) return;
     
-    try {
-      // Check if we already have a time warning message to prevent duplication
-      // Improved detection logic to catch more variations of time warning messages
-      const hasTimeWarning = messages.some(msg => {
-        if (msg.role !== 'assistant') return false;
+    console.log("Handling time warning at 2 minutes remaining");
+    
+    // Check if time warning has already been handled
+    const timeWarningHandledKey = `interview_time_warning_handled_${interviewData.id}`;
+    const timeWarningHandled = localStorage.getItem(timeWarningHandledKey) === 'true';
+    
+    if (timeWarningHandled) {
+      console.log("Time warning already handled, skipping duplicate");
+      return;
+    }
+    
+    // For voice mode, use getAIResponse to get a time warning message
+    if (interviewData.useVoiceMode && !isSubmitting && !isSpeaking && !isProcessing) {
+      console.log("Getting time warning message via getAIResponse");
+      
+      try {
+        // IMPORTANT: Do NOT set the flag before the API call
+        // This ensures the time_running_low flag is properly passed to the backend
         
-        const content = msg.content.toLowerCase();
-        return (
-          content.includes('minute left') || 
-          content.includes('wrap up') ||
-          content.includes('running low') ||
-          content.includes('one minute') ||
-          content.includes('time is short') ||
-          content.includes('time is running') ||
-          content.includes('almost out of time') ||
-          content.includes('finishing up') ||
-          content.includes('concluding') ||
-          content.includes('final thoughts')
+        // Use getAIResponse with time_running_low flag
+        await getAIResponse(
+          messages,
+          false, // not an empty response
+          false, // not a code submission
+          false  // don't include follow-up questions
         );
-      });
-      
-      if (hasTimeWarning) {
-        console.log("Time warning already issued, skipping duplicate");
-        return;
+        
+        // Set the flag AFTER successful API call
+        localStorage.setItem(timeWarningHandledKey, 'true');
+        console.log("Time warning handled successfully, flag set");
+      } catch (error) {
+        console.error("Error getting time warning message:", error);
+        // Still set the flag to prevent repeated attempts that might fail
+        localStorage.setItem(timeWarningHandledKey, 'true');
       }
-      
-      // Add a time warning message to the conversation
-      const timeWarningMessage = { 
-        role: 'assistant', 
-        content: "We have about one minute left in our interview. I'll wrap up now and give you a chance for any final thoughts." 
-      };
-      
-      // Update state with the new message - use functional update to ensure we're working with the latest state
-      setMessages(prevMessages => [...prevMessages, timeWarningMessage]);
-      
-      // Speak the time warning message
-      await speakMessage(timeWarningMessage.content);
-    } catch (err) {
-      console.error("Error handling time warning:", err);
+    } else {
+      console.log("Skipping voice time warning due to current state");
+      // Set the flag even if we skip the warning to prevent repeated checks
+      localStorage.setItem(timeWarningHandledKey, 'true');
     }
   };
 
-  // Handle time up scenario
+  // Single source of truth for handling time up scenario
   const handleTimeUp = async () => {
     if (!interviewData) return;
     
-    // Clear the timer data from localStorage
-    localStorage.removeItem(`interview_timer_${interviewData.id}`);
+    console.log("Handling time up");
     
-    // Clear the question index data from localStorage
+    // Check if time up has already been handled
+    const timeUpHandledKey = `interview_time_up_handled_${interviewData.id}`;
+    const timeUpHandled = localStorage.getItem(timeUpHandledKey) === 'true';
+    
+    if (timeUpHandled) {
+      console.log("Time up already handled, skipping duplicate");
+      return;
+    }
+    
+    // Clear timer and question index data from localStorage
+    localStorage.removeItem(`interview_timer_${interviewData.id}`);
     localStorage.removeItem(`interview_question_${interviewData.id}`);
     
-    // For voice mode, add a final message from the AI
-    if (interviewData.useVoiceMode && !isSubmitting) {
-      // Don't add the message if already submitting or if AI is speaking
-      if (!isSpeaking) {
-        try {
-          // Check if we already have a time up message to prevent duplication
-          // Improved detection logic to catch more variations of closing messages
-          const hasTimeUpMessage = messages.some(msg => {
-            if (msg.role !== 'assistant') return false;
-            
-            const content = msg.content.toLowerCase();
-            return (
-              content.includes('time is up') || 
-              content.includes('thank you for your time') ||
-              content.includes('that concludes our interview') ||
-              content.includes('wrap up') ||
-              content.includes('appreciate your candidness') ||
-              content.includes('appreciate your insights') ||
-              content.includes('best of luck') ||
-              content.includes('next steps') ||
-              content.includes('hiring process') ||
-              content.includes('get back to you') ||
-              (content.includes('thank') && content.includes('interview'))
-            );
-          });
-          
-          if (hasTimeUpMessage) {
-            console.log("Time up message already issued, skipping duplicate");
-            // Submit the interview without adding another message
-            setTimeout(() => {
-              handleSubmitInterview();
-            }, 1000);
-            return;
-          }
-          
-          // Get a special time-up message from the AI
-          const response = await fetch(`${API_BASE_URL}/api/interview/conversation`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              job_title: interviewData.jobTitle,
-              job_description: interviewData.jobDescription,
-              conversation_history: messages,
-              current_question_index: currentQuestionIndex,
-              time_up: true
-            }),
-          });
-          
-          if (!response.ok) {
-            throw new Error('Failed to get AI response');
-          }
-          
-          const data = await response.json();
-          
-          // Process the AI response to ensure it doesn't contain follow-up questions
-          let timeUpMessage = data.text;
-          
-          // Remove any text after question marks that might be follow-up questions
-          if (timeUpMessage.includes('?')) {
-            const parts = timeUpMessage.split('?');
-            timeUpMessage = parts[0] + '?';
-          }
-          
-          // Add AI response to conversation
-          const finalMessage = { role: 'assistant', content: timeUpMessage };
-          setMessages(prev => [...prev, finalMessage]);
-          
-          // Speak the time up message and ensure it completes before submitting
-          await speakMessage(timeUpMessage);
-          
-          // Add a delay to ensure the message is fully processed before submitting
-          setTimeout(() => {
-            handleSubmitInterview();
-          }, 2000);
-        } catch (err) {
-          console.error("Error getting time up message:", err);
-          // If there's an error, still try to submit the interview
-          setTimeout(() => {
-            handleSubmitInterview();
-          }, 1000);
-        }
-      } else {
-        // If AI is speaking, wait for it to finish before submitting
-        console.log("AI is currently speaking, waiting before submitting...");
-        // Check every second if AI has finished speaking
-        const checkInterval = setInterval(() => {
-          if (!isSpeaking) {
-            clearInterval(checkInterval);
-            handleSubmitInterview();
-          }
-        }, 1000);
+    // For voice mode, use getAIResponse to get a time up message
+    if (interviewData.useVoiceMode && !isSubmitting && !isSpeaking && !isProcessing) {
+      console.log("Getting time up message via getAIResponse");
+      
+      try {
+        // IMPORTANT: Do NOT set the flag before the API call
+        // This ensures the time_up flag is properly passed to the backend
         
-        // Set a maximum wait time of 10 seconds
-        setTimeout(() => {
-          clearInterval(checkInterval);
-          handleSubmitInterview();
-        }, 10000);
+        // Use getAIResponse with time_up flag
+        await getAIResponse(
+          messages,
+          false, // not an empty response
+          false, // not a code submission
+          false  // don't include follow-up questions
+        );
+        
+        // Set the flag AFTER successful API call
+        localStorage.setItem(timeUpHandledKey, 'true');
+        console.log("Time up handled successfully, flag set");
+        
+        // Wait for audio to finish before submitting
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      } catch (error) {
+        console.error("Error getting time up message:", error);
+        // Still set the flag to prevent repeated attempts that might fail
+        localStorage.setItem(timeUpHandledKey, 'true');
       }
     } else {
-      // For text mode, just submit directly
-      handleSubmitInterview();
+      console.log("Skipping voice time up message due to current state");
+      // Set the flag even if we skip the message
+      localStorage.setItem(timeUpHandledKey, 'true');
     }
+    
+    // Submit the interview after a short delay to ensure audio is finished
+    setTimeout(() => {
+      handleSubmitInterview();
+    }, interviewData.useVoiceMode ? 3000 : 1000);
   };
 
   // Initialize WebRTC
   useEffect(() => {
+    let mounted = true;
+    
     if (interviewData && showVideo) {
-      initializeWebRTC();
-    }
-
-    return () => {
-      // Stop all media tracks
-      if (localVideoRef.current && localVideoRef.current.srcObject) {
-        const mediaStream = localVideoRef.current.srcObject as MediaStream;
-        mediaStream.getTracks().forEach(track => {
-          track.stop();
-          console.log(`Cleanup: Stopped track: ${track.kind}, enabled: ${track.enabled}, readyState: ${track.readyState}`);
-        });
-        
-        // Clear the srcObject to fully release the camera
-        localVideoRef.current.srcObject = null;
-      }
+      // Use a small delay to ensure DOM is fully rendered
+      const initTimer = setTimeout(() => {
+        if (mounted) {
+          initializeWebRTC().catch(err => {
+            console.error('Failed to initialize WebRTC in useEffect:', err);
+          });
+        }
+      }, 500);
       
-      // Also stop any recording if active
-      if (mediaRecorderRef.current && isRecording) {
-        mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
-        mediaRecorderRef.current.stop();
-      }
-    };
+      return () => {
+        mounted = false;
+        clearTimeout(initTimer);
+        
+        // Stop all media tracks
+        if (localVideoRef.current && localVideoRef.current.srcObject) {
+          const mediaStream = localVideoRef.current.srcObject as MediaStream;
+          
+          // First disable tracks before stopping them
+          mediaStream.getTracks().forEach(track => {
+            track.enabled = false;
+          });
+          
+          // Small delay before stopping tracks
+          setTimeout(() => {
+            if (mediaStream) {
+              mediaStream.getTracks().forEach(track => {
+                track.stop();
+                console.log(`Cleanup: Stopped track: ${track.kind}, enabled: ${track.enabled}, readyState: ${track.readyState}`);
+              });
+            }
+            
+            // Clear the srcObject to fully release the camera
+            if (localVideoRef.current) {
+              localVideoRef.current.srcObject = null;
+            }
+          }, 100);
+        }
+        
+        // Also stop any recording if active
+        if (mediaRecorderRef.current && isRecording) {
+          try {
+            mediaRecorderRef.current.stop();
+            mediaRecorderRef.current.stream.getTracks().forEach(track => {
+              track.enabled = false;
+              setTimeout(() => track.stop(), 100);
+            });
+          } catch (err) {
+            console.error('Error stopping recording during cleanup:', err);
+          }
+        }
+      };
+    }
   }, [interviewData, showVideo, isRecording]);
 
   const initializeWebRTC = async () => {
@@ -424,75 +447,42 @@ export default function InterviewSession({ params }: { params: { id: string } })
         return;
       }
       
-      console.log('Initializing WebRTC for video');
-      
-      // First, check if we already have a video stream
-      if (localVideoRef.current && localVideoRef.current.srcObject) {
-        const currentStream = localVideoRef.current.srcObject as MediaStream;
-        const hasVideoTracks = currentStream.getVideoTracks().length > 0;
+      // If we already have a video stream, reuse it instead of requesting a new one
+      if (localVideoStreamRef.current && localVideoRef.current) {
+        // Check if any tracks are active before reusing
+        const hasActiveTracks = localVideoStreamRef.current.getVideoTracks().some(track => 
+          track.readyState === 'live' && !track.muted
+        );
         
-        // If we already have video tracks, just ensure they're enabled
-        if (hasVideoTracks) {
-          currentStream.getVideoTracks().forEach(track => {
-            track.enabled = true;
-          });
-          
+        if (hasActiveTracks) {
           console.log('Reusing existing video stream');
+          localVideoRef.current.srcObject = localVideoStreamRef.current;
           setIsVideoConnected(true);
           return;
         }
       }
       
-      console.log('Getting new video stream');
+      // Get user media (camera only) with specific constraints for stability
+      const mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30 }
+        },
+        audio: false // Don't request audio in video stream, keep them separate
+      });
       
-      // Check if we already have a media stream from recording
-      let existingAudioStream = null;
-      if (mediaRecorderRef.current && mediaRecorderRef.current.stream) {
-        existingAudioStream = mediaRecorderRef.current.stream;
-        console.log('Found existing audio stream from recorder');
-      }
-      
-      // Get user media (camera and microphone)
-      const constraints = {
-        video: true,
-        audio: !existingAudioStream // Only request audio if we don't already have it
-      };
-      
-      console.log('Requesting media with constraints:', constraints);
-      const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
-      console.log('Got new media stream with tracks:', mediaStream.getTracks().map(t => t.kind).join(', '));
-      
-      // If we have an existing audio stream, add those tracks to our new stream
-      if (existingAudioStream) {
-        console.log('Adding existing audio tracks to new stream');
-        
-        // Remove any existing audio tracks from the new stream to avoid duplicates
-        mediaStream.getAudioTracks().forEach(t => {
-          t.stop(); // Stop the track
-          mediaStream.removeTrack(t); // Remove it from the stream
-          console.log('Removed new audio track to avoid duplication');
-        });
-        
-        // Add the existing audio tracks to the new stream
-        existingAudioStream.getAudioTracks().forEach(track => {
-          // Clone the track to avoid affecting the original stream
-          const clonedTrack = track.clone();
-          mediaStream.addTrack(clonedTrack);
-          console.log('Added existing audio track to new stream');
-        });
-      }
-      
-      // Set the stream to the video element
       if (localVideoRef.current) {
+        // Store the stream in a ref to maintain it across renders
+        localVideoStreamRef.current = mediaStream;
         localVideoRef.current.srcObject = mediaStream;
-        console.log('Set new media stream to video element');
       }
 
       // Set video connected state
       setIsVideoConnected(true);
     } catch (err) {
       console.error('Error initializing WebRTC:', err);
-      setError('Failed to access camera or microphone. Please check your permissions.');
+      setError('Failed to access camera. Please check your permissions.');
       setShowVideo(false);
     }
   };
@@ -738,100 +728,174 @@ export default function InterviewSession({ params }: { params: { id: string } })
   const handleSubmitInterview = async () => {
     if (!interviewData) return;
     
-    // Don't allow submission while AI is speaking, unless time is up
-    if (isSpeaking && timeLeft > 0) {
-      setError('Please wait for the AI to finish speaking before submitting.');
-      setTimeout(() => setError(''), 3000); // Clear error after 3 seconds
+    // Prevent multiple submission attempts
+    if (isSubmitting) {
+      console.log("Already submitting, skipping duplicate submission");
       return;
     }
     
-    // Prevent multiple submission attempts
-    if (isSubmitting) return;
+    // Check if evaluation has already been generated for this interview
+    const evaluationGeneratedKey = `interview_evaluation_generated_${interviewData.id}`;
+    const evaluationGenerated = localStorage.getItem(evaluationGeneratedKey);
     
+    if (evaluationGenerated) {
+      console.log('Evaluation already generated, skipping duplicate submission');
+      // Just navigate to results page
+      router.push(`/interview/results/${interviewData.id}`);
+      return;
+    }
+    
+    console.log("Starting interview submission process");
     setIsSubmitting(true);
     setError('');
     
-    // Clear the timer data from localStorage
-    localStorage.removeItem(`interview_timer_${interviewData.id}`);
+    // Set the flag at the beginning of the evaluation process to prevent duplicates
+    localStorage.setItem(evaluationGeneratedKey, 'true');
     
-    // Clear the question index data from localStorage
+    // Wait for any ongoing speech to finish before proceeding
+    if (isSpeaking) {
+      console.log("Waiting for speech to finish before submitting...");
+      // Wait up to 5 seconds for speech to finish
+      for (let i = 0; i < 10; i++) {
+        if (!isSpeaking) break;
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+    
+    // Ensure all audio is stopped
+    if (audioRef.current) {
+      try {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+        if (audioRef.current.src) {
+          URL.revokeObjectURL(audioRef.current.src);
+          audioRef.current.src = '';
+        }
+      } catch (e) {
+        console.error("Error stopping audio:", e);
+      }
+    }
+    
+    // Stop any browser speech synthesis that might be running
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    
+    // Clear all interview-related flags from localStorage
+    localStorage.removeItem(`interview_timer_${interviewData.id}`);
     localStorage.removeItem(`interview_question_${interviewData.id}`);
+    localStorage.removeItem(`interview_time_warning_handled_${interviewData.id}`);
+    localStorage.removeItem(`interview_time_up_handled_${interviewData.id}`);
     
     try {
-      // Stop all media tracks and ensure they're fully stopped
-      if (localVideoRef.current && localVideoRef.current.srcObject) {
-        const mediaStream = localVideoRef.current.srcObject as MediaStream;
-        mediaStream.getTracks().forEach(track => {
-          track.stop();
-          console.log(`Stopped track: ${track.kind}, enabled: ${track.enabled}, readyState: ${track.readyState}`);
-        });
-        
-        // Clear the srcObject to fully release the camera
-        localVideoRef.current.srcObject = null;
-      }
-      
-      // Stop recording if active
-      if (mediaRecorderRef.current && isRecording) {
-        mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
-        mediaRecorderRef.current.stop();
-        setIsRecording(false);
-      }
-      
-      // Force a global cleanup of all media devices before navigation
-      try {
-        // Get all media devices and stop them
-        const allDevices = await navigator.mediaDevices.enumerateDevices();
-        console.log(`Cleaning up ${allDevices.length} media devices before navigation`);
-        
-        // Stop any active MediaStream tracks that might still be running
-        const allTracks = document.querySelectorAll('video, audio');
-        allTracks.forEach(element => {
-          const mediaElement = element as HTMLMediaElement;
-          if (mediaElement.srcObject) {
-            const stream = mediaElement.srcObject as MediaStream;
-            if (stream) {
-              stream.getTracks().forEach(track => {
-                track.stop();
-                console.log(`Global cleanup: Stopped track: ${track.kind}`);
-              });
-              mediaElement.srcObject = null;
-            }
-          }
-        });
-      } catch (err) {
-        console.error('Error during global media cleanup:', err);
-      }
+      // Clean up all media before navigation
+      cleanupMedia();
       
       // Format answers for submission
-      const formattedAnswers = interviewData.questions.map(question => ({
-        question_id: question.id,
-        question: question.question,
-        question_type: question.type,
-        answer: answers[question.id] || ''
-      }));
+      let formattedAnswers;
       
-      // Submit answers for evaluation
-      let headers: Record<string, string> = {
-        'Content-Type': 'application/json'
-      };
-      
-      try {
-        // Try to get the access token if available
-        const token = await getAccessToken();
-        console.log('Authentication token obtained:', token ? 'Token exists' : 'No token');
-        if (token) {
-          headers['Authorization'] = `Bearer ${token}`;
+      if (interviewData.useVoiceMode) {
+        // For voice mode, extract answers from the conversation history
+        const conversationAnswers: Record<string, string> = {};
+        
+        // Initialize with empty answers
+        interviewData.questions.forEach(q => {
+          conversationAnswers[q.id] = '';
+        });
+        
+        // Process the conversation to extract user responses
+        let currentQuestionId = '';
+        let currentAnswer = '';
+        
+        // First, identify all questions in the conversation
+        const questionMap = new Map();
+        interviewData.questions.forEach(q => {
+          questionMap.set(q.question, q.id);
+        });
+        
+        // Then process the conversation to extract answers
+        for (let i = 0; i < messages.length; i++) {
+          const msg = messages[i];
+          
+          if (msg.role === 'assistant') {
+            // Find which question this is
+            for (const [questionText, questionId] of questionMap.entries()) {
+              if (msg.content.includes(questionText)) {
+                currentQuestionId = questionId;
+                currentAnswer = ''; // Reset the answer for this question
+                
+                // Look ahead for user responses to this question
+                let j = i + 1;
+                while (j < messages.length && j < messages.length - 1) {
+                  // Only process user messages
+                  if (messages[j].role === 'user') {
+                    if (currentAnswer) {
+                      currentAnswer += ' ' + messages[j].content;
+                    } else {
+                      currentAnswer = messages[j].content;
+                    }
+                  }
+                  
+                  j++;
+                  
+                  // Stop if we encounter another question from the assistant
+                  if (j < messages.length && messages[j].role === 'assistant') {
+                    let isNextQuestion = false;
+                    for (const [qText, qId] of questionMap.entries()) {
+                      if (messages[j].content.includes(qText)) {
+                        isNextQuestion = true;
+                        break;
+                      }
+                    }
+                    if (isNextQuestion) break;
+                  }
+                }
+                
+                // Store the answer for this question
+                if (currentAnswer) {
+                  conversationAnswers[currentQuestionId] = currentAnswer;
+                  console.log(`Extracted answer for question ${currentQuestionId}: ${currentAnswer.substring(0, 50)}...`);
+                }
+                
+                break;
+              }
+            }
+          }
         }
-      } catch (err) {
-        // If getAccessToken fails, continue without authentication
-        console.error('Error getting access token:', err);
-        console.log('Continuing without authentication');
+        
+        // Format the conversation answers
+        formattedAnswers = interviewData.questions.map(question => ({
+          question_id: question.id,
+          question: question.question,
+          question_type: question.type,
+          answer: conversationAnswers[question.id] || answers[question.id] || 'No answer provided'
+        }));
+        
+        console.log('Voice mode answers extracted from conversation:', formattedAnswers);
+      } else {
+        // For text mode, use the answers state directly
+        formattedAnswers = interviewData.questions.map(question => ({
+          question_id: question.id,
+          question: question.question,
+          question_type: question.type,
+          answer: answers[question.id] || 'No answer provided'
+        }));
       }
       
-      console.log('Making request to API with headers:', headers);
+      // Try to get the evaluation from the API first
+      let evaluationData = null;
       
-      // Use the production endpoint with authentication
       try {
+        // Get authentication token
+        const token = await getAccessToken();
+        const headers = {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        };
+        
+        console.log('Making request to API with headers:', Object.keys(headers));
+        
+        // Make the API request - this will try OpenAI first, then DeepSeek as fallback
         const response = await fetch(`${API_BASE_URL}/api/interview/feedback`, {
           method: 'POST',
           headers,
@@ -840,36 +904,51 @@ export default function InterviewSession({ params }: { params: { id: string } })
             answers: formattedAnswers,
             job_title: interviewData.jobTitle,
             interview_type: interviewData.interviewType,
-            questions: interviewData.questions // Include the questions in the evaluation request
+            questions: interviewData.questions, // Include the questions in the evaluation request
+            conversation_history: interviewData.useVoiceMode ? 
+              // Filter out system messages and format conversation history
+              messages.filter(msg => msg.role !== 'system').map(msg => ({
+                role: msg.role,
+                content: msg.content
+              })) : 
+              undefined // Include conversation history for voice mode
           }),
         });
         
         console.log('API response status:', response.status);
         
         if (response.ok) {
-          const evaluationData = await response.json();
-          
-          // Store evaluation data with a unique key that includes the interview ID
-          localStorage.setItem(`interviewEvaluation_${interviewData.id}`, JSON.stringify({
-            interviewId: interviewData.id,
-            jobTitle: interviewData.jobTitle,
-            interviewType: interviewData.interviewType,
-            timestamp: new Date().toISOString(), // Add timestamp to track when this evaluation was created
-            ...evaluationData
-          }));
-          
-          // Also store the latest evaluation ID for easy access
-          localStorage.setItem('latestInterviewEvaluation', interviewData.id || '');
+          evaluationData = await response.json();
+          console.log('Successfully received evaluation data from API (OpenAI or DeepSeek)');
         } else {
-          console.error('Failed to submit interview feedback, using local evaluation');
-          // Always use the local evaluation if the API fails
-          await generateLocalEvaluation(formattedAnswers);
+          console.error('Failed to get evaluation from API (both OpenAI and DeepSeek failed), falling back to local evaluation');
         }
-      } catch (error) {
-        console.error('Error submitting interview feedback:', error);
-        // Always use the local evaluation if there's an error
-        await generateLocalEvaluation(formattedAnswers);
+      } catch (apiError) {
+        console.error('Error calling evaluation API:', apiError);
       }
+      
+      // If API evaluation failed (both OpenAI and DeepSeek), use local evaluation as last resort fallback
+      if (!evaluationData) {
+        console.log('Using local evaluation as last resort fallback (both OpenAI and DeepSeek failed)');
+        evaluationData = await generateLocalEvaluation(formattedAnswers);
+      }
+      
+      // Store the evaluation data
+      if (evaluationData) {
+        localStorage.setItem(`interview_evaluation_${interviewData.id}`, JSON.stringify({
+          interviewId: interviewData.id,
+          jobTitle: interviewData.jobTitle,
+          interviewType: interviewData.interviewType,
+          timestamp: new Date().toISOString(), // Add timestamp to track when this evaluation was created
+          ...evaluationData
+        }));
+        
+        // Also store the latest evaluation ID for easy access
+        localStorage.setItem('latestInterviewEvaluation', interviewData.id || '');
+      }
+      
+      // Clean up media again before navigation to ensure everything is released
+      cleanupMedia();
       
       // Navigate to results page
       router.push(`/interview/results/${interviewData.id}`);
@@ -877,10 +956,13 @@ export default function InterviewSession({ params }: { params: { id: string } })
       console.error('Error submitting interview:', err);
       setError('Failed to submit interview. Please try again.');
       setIsSubmitting(false);
+      
+      // Remove the evaluation generated flag so the user can try again
+      localStorage.removeItem(evaluationGeneratedKey);
     }
   };
-  
-  // Function to generate a local evaluation using the conversation API or fallback data
+
+  // Function to generate a local evaluation as a last resort fallback when both OpenAI and DeepSeek evaluations fail
   const generateLocalEvaluation = async (formattedAnswers: any[]) => {
     const isTextMode = !interviewData?.useVoiceMode;
     
@@ -935,616 +1017,229 @@ export default function InterviewSession({ params }: { params: { id: string } })
     // If all answers are empty or nonsensical, force a score of 0
     const forceZeroScore = hasEmptyAnswers || hasNonsensicalAnswers;
     
-    // If all answers are empty, use a predefined evaluation instead of trying to generate one
-    if (forceZeroScore) {
-      console.log('Using predefined evaluation for empty or nonsensical answers');
-      
-      const emptyEvaluation = {
-        interviewId: interviewData?.id,
-        jobTitle: interviewData?.jobTitle,
-        interviewType: interviewData?.interviewType,
-        timestamp: new Date().toISOString(),
-        score: 0,
-        feedback: "The answers provided are empty, making it impossible to evaluate the candidate's knowledge and reasoning skills for the position.",
-        strengths: [],
-        weaknesses: [
-          "No answers provided",
-          "Lack of demonstration of technical knowledge",
-          "Inability to articulate troubleshooting processes"
-        ],
-        improvement_areas: [
-          "Provide detailed answers to interview questions",
-          "Showcase problem-solving and technical skills",
-          "Explain concepts clearly and concisely"
-        ],
-        answers: formattedAnswers,
-        questions: interviewData?.questions
-      };
-      
-      // Store the evaluation
-      localStorage.setItem(`interviewEvaluation_${interviewData?.id}`, JSON.stringify(emptyEvaluation));
-      localStorage.setItem('latestInterviewEvaluation', interviewData?.id || '');
-      return;
-    }
-    
     try {
-      // Create a more detailed prompt for evaluation that includes the specific job and answers
-      let evaluationPrompt = `You are an expert interview evaluator for ${interviewData?.interviewType || 'technical'} positions. 
-Please evaluate the following interview for the position of ${interviewData?.jobTitle || 'Software Engineer'}.
-
-Job Title: ${interviewData?.jobTitle || 'Software Engineer'}
-Interview Type: ${interviewData?.interviewType || 'technical'}
-
-Questions and Answers:
-`;
-      
-      // Add questions and answers with more context
-      interviewData?.questions.forEach((question, index) => {
-        const answer = answers[question.id] || "No answer provided";
-        evaluationPrompt += `Question ${index + 1}: ${question.question}\nCandidate's Answer: ${answer}\n\n`;
-      });
-      
-      // Add special instructions for empty answers
-      if (hasEmptyAnswers) {
-        evaluationPrompt += `
-IMPORTANT: The candidate has not provided any substantive answers to the interview questions. 
-For candidates who do not provide answers, you should:
-1. Give a score of 0 out of 100
-2. Provide feedback that clearly states they did not engage with the questions
-3. List minimal strengths related only to completing the interview process
-4. Focus on the lack of engagement as the primary area for improvement
-5. Recommend preparation strategies for future interviews
-`;
+      // If all answers are empty or nonsensical, return a zero score evaluation
+      if (forceZeroScore) {
+        return {
+          score: 0,
+          feedback: "The candidate did not provide substantive answers to the interview questions. The responses were either empty, too short, or consisted of random characters that did not address the questions.",
+          strengths: [],
+          areas_for_improvement: [
+            "Providing substantive responses to interview questions",
+            "Demonstrating knowledge and skills relevant to the position",
+            "Engaging meaningfully with the interview questions"
+          ],
+          recommendations: [
+            "Prepare answers to common interview questions in advance",
+            "Practice articulating thoughts clearly and concisely",
+            "Research the company and position before interviews"
+          ]
+        };
       }
-      
-      evaluationPrompt += `
-Based on the above interview, please provide a comprehensive evaluation with the following sections:
 
-1. Score: Give a score out of 100 based on the quality, relevance, and completeness of the answers.${hasEmptyAnswers ? ' For empty or minimal answers with no meaningful content, the score should be 0.' : ''}
-
-2. Feedback: Provide detailed overall feedback that highlights key observations from the interview, including the candidate's communication style, technical knowledge, and problem-solving approach.
-
-3. Strengths: List at least 3-5 specific strengths demonstrated in the answers, with brief explanations of each.
-
-4. Areas for Improvement: List at least 3-5 specific areas where the candidate could improve, with brief explanations of each.
-
-5. Recommendations: Provide at least 3-5 specific actionable recommendations for professional development that would help the candidate improve in future interviews.
-
-Format your response with clear section headers (Score, Feedback, Strengths, Areas for Improvement, Recommendations).
-Make sure your evaluation is specific to this candidate's actual answers and the ${interviewData?.jobTitle || 'Software Engineer'} position.
-`;
-      
-      let headers: Record<string, string> = {
-        'Content-Type': 'application/json'
+      // For non-empty answers, return an error message since both API evaluations failed
+      return {
+        score: 50, // Neutral score
+        feedback: "We encountered technical difficulties while evaluating your interview. This is a system-generated fallback evaluation as both our primary and secondary evaluation services were unavailable. Please consider retaking the interview for a more accurate assessment.",
+        strengths: [
+          "Interview completed successfully",
+          "Answers were provided for the questions"
+        ],
+        areas_for_improvement: [
+          "Technical issues prevented a complete evaluation",
+          "Consider retaking the interview for a more accurate assessment"
+        ],
+        recommendations: [
+          "Try the interview again with a stable connection",
+          "Contact support if this issue persists"
+        ]
       };
-      
-      try {
-        const token = await getAccessToken();
-        if (token) {
-          headers['Authorization'] = `Bearer ${token}`;
-        }
-      } catch (err) {
-        console.error('Error getting access token for local evaluation:', err);
-      }
-      
-      // Make multiple attempts to get an AI-generated evaluation
-      let aiGeneratedEvaluation = null;
-      
-      // First attempt: Try to use the conversation API
-      try {
-        console.log('Attempting to generate evaluation using conversation API...');
-        const response = await fetch(`${API_BASE_URL}/api/interview/conversation`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            job_title: interviewData?.jobTitle || '',
-            job_description: interviewData?.jobDescription || interviewData?.jobTitle || '',
-            conversation_history: [
-              { role: "system", content: "You are an expert interview evaluator for technical positions. Provide a detailed, honest, and constructive evaluation with specific examples from the candidate's answers." },
-              { role: "user", content: evaluationPrompt }
-            ],
-            is_code_submission: false,
-            include_follow_up: false
-          }),
-        });
-        
-        if (response.ok) {
-          const data = await response.json();
-          
-          // Parse the AI response to extract evaluation components
-          const aiText = data.text || "";
-          console.log('AI generated evaluation text:', aiText);
-          
-          // Extract score using regex
-          const scoreMatch = aiText.match(/(\d+)\/100|score:?\s*(\d+)|rating:?\s*(\d+)/i);
-          let score = scoreMatch ? parseInt(scoreMatch[1] || scoreMatch[2] || scoreMatch[3]) : 70;
-          
-          // Force score to 0 for empty or nonsensical answers
-          if (forceZeroScore) {
-            console.log('Forcing score to 0 for empty or nonsensical answers (AI response)');
-            score = 0;
-          }
-          
-          console.log('Final score from AI:', score, 'Empty answers:', hasEmptyAnswers, 'Nonsensical answers:', hasNonsensicalAnswers);
-          
-          // Extract sections
-          const feedbackMatch = aiText.match(/feedback:(.*?)(?=strengths:|$)/i);
-          const strengthsMatch = aiText.match(/strengths:(.*?)(?=areas for improvement:|weaknesses:|$)/i);
-          const weaknessesMatch = aiText.match(/(?:areas for improvement:|weaknesses:)(.*?)(?=recommendations:|suggestions:|$)/i);
-          const recommendationsMatch = aiText.match(/(?:recommendations:|suggestions:)(.*?)(?=$)/i);
-          
-          // Extract lists using regex
-          const extractList = (text: string): string[] => {
-            if (!text) return [];
-            
-            // Try to extract numbered or bulleted lists
-            const listItems = text.split(/\n\s*[-•*\d]+\.?\s+/).filter((item: string) => item.trim().length > 0);
-            
-            if (listItems.length > 1) {
-              return listItems;
-            }
-            
-            // If no list found, try to split by newlines
-            const lines = text.split(/\n+/).filter((line: string) => line.trim().length > 0);
-            
-            if (lines.length > 1) {
-              return lines;
-            }
-            
-            // If still no list, just return the whole text as one item
-            return [text.trim()];
-          };
-          
-          const feedback = feedbackMatch ? feedbackMatch[1].trim() : "Thank you for completing the interview.";
-          const strengths = strengthsMatch ? extractList(strengthsMatch[1]) : [];
-          const weaknesses = weaknessesMatch ? extractList(weaknessesMatch[1]) : [];
-          const recommendations = recommendationsMatch ? extractList(recommendationsMatch[1]) : [];
-          
-          // Check if we have a valid evaluation (has score and at least some content in each section)
-          if (score > 0 && 
-              feedback.length > 20 && 
-              strengths.length > 0 && 
-              weaknesses.length > 0 && 
-              recommendations.length > 0) {
-            
-            aiGeneratedEvaluation = {
-              interviewId: interviewData?.id,
-              jobTitle: interviewData?.jobTitle,
-              interviewType: interviewData?.interviewType,
-              timestamp: new Date().toISOString(),
-              score: score,
-              feedback: feedback,
-              strengths: strengths,
-              weaknesses: weaknesses,
-              improvement_areas: recommendations,
-              answers: formattedAnswers,
-              questions: interviewData?.questions
-            };
-            
-            console.log('Successfully generated AI evaluation');
-          } else {
-            console.warn('AI evaluation was incomplete, missing some sections');
-          }
-        }
-      } catch (error) {
-        console.error('Error generating evaluation with conversation API:', error);
-      }
-      
-      // If we have a valid AI-generated evaluation, use it
-      if (aiGeneratedEvaluation) {
-        // Use a unique key for each interview evaluation
-        localStorage.setItem(`interviewEvaluation_${interviewData?.id}`, JSON.stringify(aiGeneratedEvaluation));
-        
-        // Also store the latest evaluation ID for easy access
-        localStorage.setItem('latestInterviewEvaluation', interviewData?.id || '');
-        
-        return;
-      }
-      
-      // If we couldn't generate an AI evaluation, use job-specific fallback data
-      console.warn('Using fallback evaluation data');
-      
-      // Create more relevant fallback data based on the job title and interview type
-      const jobTitle = interviewData?.jobTitle?.toLowerCase() || '';
-      const interviewType = interviewData?.interviewType?.toLowerCase() || 'technical';
-      
-      let fallbackStrengths = [
-        "Technical knowledge and understanding of core concepts",
-        "Clear communication of ideas",
-        "Structured approach to problem-solving"
-      ];
-      
-      let fallbackWeaknesses = [
-        "Could provide more detailed examples from past experience",
-        "Some technical explanations could be more comprehensive",
-        "Consider addressing edge cases in your solutions"
-      ];
-      
-      let fallbackRecommendations = [
-        "Practice explaining complex technical concepts with concrete examples",
-        "Develop a framework for answering behavioral questions with the STAR method",
-        "Expand knowledge in specific technical areas mentioned in the job description",
-        "Prepare more detailed examples of past projects and challenges"
-      ];
-      
-      // Customize fallback data based on job title
-      if (jobTitle.includes('devops') || jobTitle.includes('devsecops') || jobTitle.includes('sre')) {
-        fallbackStrengths = [
-          "Understanding of CI/CD principles and implementation",
-          "Knowledge of infrastructure as code concepts",
-          "Awareness of security considerations in DevOps pipelines"
-        ];
-        
-        fallbackWeaknesses = [
-          "Could provide more specific examples of DevOps tools and practices",
-          "Explanations of security integration could be more detailed",
-          "Consider discussing monitoring and observability in more depth"
-        ];
-        
-        fallbackRecommendations = [
-          "Gain hands-on experience with more DevOps tools like Terraform, Ansible, or Kubernetes",
-          "Develop deeper knowledge of security practices in CI/CD pipelines",
-          "Practice explaining complex infrastructure setups with diagrams and concrete examples",
-          "Explore modern observability tools and practices"
-        ];
-      } else if (jobTitle.includes('frontend') || jobTitle.includes('ui') || jobTitle.includes('ux')) {
-        fallbackStrengths = [
-          "Understanding of modern frontend frameworks and libraries",
-          "Knowledge of UI/UX principles",
-          "Awareness of performance optimization techniques"
-        ];
-        
-        fallbackWeaknesses = [
-          "Could provide more specific examples of responsive design implementation",
-          "Explanations of state management could be more detailed",
-          "Consider discussing accessibility considerations in more depth"
-        ];
-        
-        fallbackRecommendations = [
-          "Gain more experience with state management solutions",
-          "Develop deeper knowledge of web accessibility standards",
-          "Practice explaining UI component architecture with diagrams",
-          "Explore modern frontend testing strategies"
-        ];
-      } else if (jobTitle.includes('backend') || jobTitle.includes('api') || jobTitle.includes('server')) {
-        fallbackStrengths = [
-          "Understanding of API design principles",
-          "Knowledge of database concepts and optimization",
-          "Awareness of server-side performance considerations"
-        ];
-        
-        fallbackWeaknesses = [
-          "Could provide more specific examples of API security implementation",
-          "Explanations of database scaling could be more detailed",
-          "Consider discussing error handling and logging in more depth"
-        ];
-        
-        fallbackRecommendations = [
-          "Gain more experience with different database technologies",
-          "Develop deeper knowledge of API security best practices",
-          "Practice explaining complex backend architectures with diagrams",
-          "Explore modern logging and monitoring solutions"
-        ];
-      }
-      
-      // Set appropriate score and feedback based on answer content
-      const fallbackScore = forceZeroScore ? 0 : 70;
-      console.log('Fallback score:', fallbackScore, 'Empty answers:', hasEmptyAnswers, 'Nonsensical answers:', hasNonsensicalAnswers);
-      
-      const fallbackFeedback = forceZeroScore 
-        ? `Thank you for completing the ${interviewType} interview for the ${interviewData?.jobTitle} position. ${hasEmptyAnswers ? 'However, you did not provide any substantive answers to the questions.' : 'However, your responses appear to be nonsensical or random characters rather than meaningful answers.'} Your score is 0/100 because meaningful responses are required for evaluation.`
-        : `Thank you for completing the ${interviewType} interview for the ${interviewData?.jobTitle} position. Your responses have been recorded and evaluated. You demonstrated good technical knowledge but could provide more detailed examples in your answers.`;
-      
-      // Create the fallback evaluation
-      const fallbackEvaluation = {
-        interviewId: interviewData?.id,
-        jobTitle: interviewData?.jobTitle,
-        interviewType: interviewData?.interviewType,
-        timestamp: new Date().toISOString(),
-        score: fallbackScore,
-        feedback: fallbackFeedback,
-        strengths: hasEmptyAnswers ? [
-          "Completed the interview process",
-          "Navigated the interview interface successfully",
-          "Submitted the interview for evaluation"
-        ] : fallbackStrengths,
-        weaknesses: hasEmptyAnswers ? [
-          "Did not provide any substantive answers to the interview questions",
-          "Unable to demonstrate technical knowledge or problem-solving skills",
-          "Did not engage with the interview content"
-        ] : fallbackWeaknesses,
-        improvement_areas: hasEmptyAnswers ? [
-          "Prepare answers for common interview questions in advance",
-          "Practice articulating technical concepts clearly and concisely",
-          "Engage fully with the interview process by providing detailed responses",
-          "Review the technical concepts related to the position before the interview"
-        ] : fallbackRecommendations,
-        answers: formattedAnswers,
-        questions: interviewData?.questions
-      };
-      
-      // Use a unique key for each interview evaluation
-      localStorage.setItem(`interviewEvaluation_${interviewData?.id}`, JSON.stringify(fallbackEvaluation));
-      
-      // Also store the latest evaluation ID for easy access
-      localStorage.setItem('latestInterviewEvaluation', interviewData?.id || '');
     } catch (error) {
-      console.error('Error generating local evaluation:', error);
-      // Fallback to minimal data
+      console.error('Error in generateLocalEvaluation:', error);
       
-      const minimalEvaluation = {
-        interviewId: interviewData?.id,
-        jobTitle: interviewData?.jobTitle,
-        interviewType: interviewData?.interviewType,
-        timestamp: new Date().toISOString(),
-        score: forceZeroScore ? 0 : 70,
-        feedback: forceZeroScore 
-          ? `Thank you for completing the interview. ${hasEmptyAnswers ? 'However, you did not provide any substantive answers to the questions.' : 'However, your responses appear to be nonsensical or random characters rather than meaningful answers.'} Your score is 0/100 because meaningful responses are required for evaluation.`
-          : "Thank you for completing the interview. Your responses have been recorded and evaluated.",
-        strengths: forceZeroScore ? [
-          "No meaningful strengths could be identified from the provided answers.",
-          "Completed the interview process",
-          "Submitted the interview for evaluation"
-        ] : [
-          "Technical knowledge and understanding of core concepts",
-          "Clear communication of ideas",
-          "Structured approach to problem-solving"
+      // Return a basic error message if there's an exception
+      return {
+        score: forceZeroScore ? 0 : 50,
+        feedback: "We encountered an error while evaluating your interview. This is a system-generated fallback evaluation as our evaluation services were unavailable.",
+        strengths: [
+          "Interview completed successfully"
         ],
-        weaknesses: forceZeroScore ? [
-          hasEmptyAnswers ? "Did not provide any substantive answers to the interview questions" : "Provided nonsensical or random text instead of meaningful answers",
-          "Unable to demonstrate technical knowledge or problem-solving skills",
-          "Did not engage with the interview content"
-        ] : [
-          "Could provide more detailed examples from past experience",
-          "Some technical explanations could be more comprehensive",
-          "Consider addressing edge cases in your solutions"
+        areas_for_improvement: [
+          "Technical issues prevented a complete evaluation",
+          "Consider retaking the interview for a more accurate assessment"
         ],
-        improvement_areas: forceZeroScore ? [
-          "Provide thoughtful, relevant answers to interview questions",
-          "Take time to understand each question before responding",
-          "Engage fully with the interview process by providing detailed responses",
-          "Review the technical concepts related to the position before the interview"
-        ] : [
-          "Practice explaining complex technical concepts with concrete examples",
-          "Develop a framework for answering behavioral questions with the STAR method",
-          "Expand knowledge in specific technical areas mentioned in the job description",
-          "Prepare more detailed examples of past projects and challenges"
-        ],
-        answers: formattedAnswers,
-        questions: interviewData?.questions
+        recommendations: [
+          "Try the interview again with a stable connection",
+          "Contact support if this issue persists"
+        ]
       };
-      
-      // Use a unique key for each interview evaluation
-      localStorage.setItem(`interviewEvaluation_${interviewData?.id}`, JSON.stringify(minimalEvaluation));
-      
-      // Also store the latest evaluation ID for easy access
-      localStorage.setItem('latestInterviewEvaluation', interviewData?.id || '');
     }
   };
 
   // Voice mode functions
   const toggleRecording = async () => {
-    // Prevent recording while AI is speaking
-    if (isSpeaking) {
-      setError('Please wait for the AI to finish speaking before recording.');
-      setTimeout(() => setError(''), 3000);
+    // Prevent recording while AI is speaking or processing
+    if (isSpeaking || isProcessing) {
+      console.log('Cannot toggle recording while AI is speaking or processing');
       return;
     }
     
-    // Prevent recording while processing audio
-    if (isProcessing) {
-      setError('Please wait for the audio to be processed before recording again.');
-      setTimeout(() => setError(''), 3000);
-      return;
-    }
+    // Prevent rapid toggling by setting processing state
+    setIsProcessing(true);
     
-    if (isRecording) {
-      stopRecording();
-    } else {
-      // If video is on, make sure we have access to the microphone
-      if (showVideo && (!localVideoRef.current || !localVideoRef.current.srcObject)) {
-        // Initialize WebRTC first to get microphone access
-        try {
-          await initializeWebRTC();
-        } catch (err) {
-          console.error('Error initializing WebRTC:', err);
-          setError('Failed to access microphone. Please check your permissions.');
-          return;
-        }
+    try {
+      if (isRecording) {
+        stopRecording();
+      } else {
+        await startRecording();
       }
-      
-      await startRecording();
+    } catch (err) {
+      console.error('Error toggling recording:', err);
+      setError('Failed to toggle recording.');
+      setIsProcessing(false);
     }
   };
   
-  // Fix the startRecording function to prevent video blanking
+  // Fix the startRecording function to make it independent of video
   const startRecording = async () => {
     try {
+      // If already recording, don't do anything
+      if (isRecording || mediaRecorderRef.current) {
+        console.log('Already recording, ignoring duplicate start request');
+        return;
+      }
+      
+      // Reset audio chunks
       audioChunksRef.current = [];
       
-      // Check if we already have a video stream with audio
-      let stream: MediaStream;
+      // Set a flag to indicate we're initializing recording
+      // This prevents UI flicker
+      setIsProcessing(true);
       
-      // If we have an existing media recorder, stop it first
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        try {
-          mediaRecorderRef.current.stop();
-          console.log('Stopped existing media recorder');
-        } catch (err) {
-          console.error('Error stopping existing media recorder:', err);
-        }
-      }
-      
-      if (showVideo && localVideoRef.current && localVideoRef.current.srcObject) {
-        console.log('Using existing video stream for recording');
-        // Get the existing stream
-        const existingStream = localVideoRef.current.srcObject as MediaStream;
-        
-        // Check if it has audio tracks
-        if (existingStream.getAudioTracks().length > 0) {
-          // Use the existing stream directly if it has audio
-          console.log('Using existing stream with audio tracks');
-          stream = existingStream;
-        } else {
-          // If no audio tracks, get audio only without affecting the video
-          try {
-            console.log('Getting new audio stream to add to existing video stream');
-            const audioStream = await navigator.mediaDevices.getUserMedia({ 
-              audio: true,
-              video: false // Explicitly set video to false
-            });
-            
-            // Create a new stream with both video and audio tracks
-            stream = new MediaStream();
-            
-            // Add all tracks from the existing stream
-            existingStream.getTracks().forEach(track => {
-              stream.addTrack(track);
-            });
-            
-            // Add audio tracks from the new stream
-            audioStream.getAudioTracks().forEach(track => {
-              stream.addTrack(track);
-            });
-            
-            // Update the video element with the combined stream
-            if (localVideoRef.current) {
-              localVideoRef.current.srcObject = stream;
-            }
-          } catch (err) {
-            console.error('Error getting audio stream:', err);
-            throw new Error('Failed to access microphone');
-          }
-        }
-      } else {
-        // Get a new audio stream if no video stream exists
-        console.log('Getting new audio-only stream for recording');
-        // Explicitly request only audio to avoid triggering camera
-        stream = await navigator.mediaDevices.getUserMedia({ 
-          audio: true,
-          video: false // Explicitly set video to false
+      try {
+        // Always get a fresh audio stream, independent of video
+        const audioStream = await navigator.mediaDevices.getUserMedia({ 
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          } 
         });
+        
+        // Store the audio stream in its own ref
+        audioStreamRef.current = audioStream;
+        
+        // Create a new MediaRecorder instance with the audio stream
+        const mediaRecorder = new MediaRecorder(audioStream, {
+          mimeType: 'audio/webm'
+        });
+        
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            audioChunksRef.current.push(event.data);
+          }
+        };
+        
+        mediaRecorder.onstop = async () => {
+          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+          await processAudio(audioBlob);
+        };
+        
+        // Start recording
+        mediaRecorder.start();
+        mediaRecorderRef.current = mediaRecorder;
+        setIsRecording(true);
+        
+        console.log('Started recording audio with separate stream');
+      } catch (err) {
+        console.error('Error starting recording:', err);
+        setError('Failed to access microphone. Please check your permissions.');
+      } finally {
+        // Always clear the processing state
+        setIsProcessing(false);
       }
-      
-      // Create a new MediaRecorder with the stream
-      const options = { mimeType: 'audio/webm' };
-      const mediaRecorder = new MediaRecorder(stream, options);
-      
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-      
-      mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        await processAudio(audioBlob);
-      };
-      
-      // Start recording
-      mediaRecorder.start();
-      mediaRecorderRef.current = mediaRecorder;
-      setIsRecording(true);
-      console.log('Started recording with MediaRecorder state:', mediaRecorder.state);
     } catch (err) {
       setError('Failed to access microphone. Please check your permissions.');
-      console.error('Error starting recording:', err);
+      console.error('Error in startRecording:', err);
+      setIsProcessing(false);
     }
   };
   
-  // Fix the stopRecording function to prevent video blanking
+  // Fix the stopRecording function to make it independent of video
   const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
+    if (!mediaRecorderRef.current || !isRecording) {
+      console.log('Not recording, ignoring stop request');
+      return;
+    }
+    
+    try {
+      // Set processing flag to prevent UI flicker
+      setIsProcessing(true);
+      
       try {
-        console.log('Stopping recording with MediaRecorder state:', mediaRecorderRef.current.state);
+        // Stop the media recorder
+        mediaRecorderRef.current.stop();
         
-        // Only stop if the recorder is active
-        if (mediaRecorderRef.current.state !== 'inactive') {
-          mediaRecorderRef.current.stop();
-          console.log('MediaRecorder stopped');
-        }
-        
-        // Only stop audio tracks from the recorder stream, not from the video stream
-        if (mediaRecorderRef.current.stream) {
-          // Create a separate reference to the recorder stream
-          const recorderStream = mediaRecorderRef.current.stream;
+        // Stop only the audio tracks from the recorder
+        if (audioStreamRef.current) {
+          // First disable tracks before stopping to prevent visual glitches
+          audioStreamRef.current.getTracks().forEach(track => {
+            track.enabled = false;
+          });
           
-          // If we're not showing video, stop all tracks
-          if (!showVideo) {
-            recorderStream.getTracks().forEach(track => {
-              track.stop();
-              console.log(`Stopped track: ${track.kind}`);
-            });
-          } else {
-            // If we're showing video, only stop audio tracks that aren't used by the video
-            // First, get all audio tracks from the recorder stream
-            const audioTracks = recorderStream.getAudioTracks();
-            
-            // If we have a video stream, don't stop its audio tracks
-            if (localVideoRef.current && localVideoRef.current.srcObject) {
-              const videoStream = localVideoRef.current.srcObject as MediaStream;
-              const videoAudioTracks = videoStream.getAudioTracks();
-              
-              // Only stop audio tracks that aren't in the video stream
-              audioTracks.forEach(track => {
-                const isInVideoStream = videoAudioTracks.some(vTrack => vTrack.id === track.id);
-                if (!isInVideoStream) {
-                  track.stop();
-                  console.log(`Stopped audio track not used by video: ${track.id}`);
-                } else {
-                  console.log(`Kept audio track used by video: ${track.id}`);
-                }
-              });
-            } else {
-              // No video stream, stop all audio tracks
-              audioTracks.forEach(track => {
+          // Small delay before stopping tracks
+          setTimeout(() => {
+            if (audioStreamRef.current) {
+              audioStreamRef.current.getTracks().forEach(track => {
                 track.stop();
-                console.log(`Stopped audio track: ${track.id}`);
               });
+              // Clear the audio stream reference
+              audioStreamRef.current = null;
             }
-          }
-          
-          console.log('Kept video stream intact during recording stop');
+            
+            // Clear the media recorder reference
+            mediaRecorderRef.current = null;
+          }, 100);
         }
+        
+        // Update recording state
+        setIsRecording(false);
       } catch (err) {
         console.error('Error stopping recording:', err);
+        setError('Failed to stop recording.');
+        setIsRecording(false);
+      } finally {
+        // Clear processing state after a short delay
+        setTimeout(() => {
+          setIsProcessing(false);
+        }, 300);
       }
-      
+    } catch (err) {
+      console.error('Error in stopRecording:', err);
+      setError('Failed to stop recording.');
       setIsRecording(false);
+      setIsProcessing(false);
     }
   };
   
   const processAudio = async (audioBlob: Blob) => {
-    if (!interviewData) return;
-    
-    // Check if the audio blob is empty or too small
-    if (audioBlob.size < 1000) {
-      console.warn('Audio data is too small or empty, skipping transcription');
-      setIsProcessing(false);
-      return;
-    }
-    
-    setIsProcessing(true);
-    
     try {
-      // Convert blob to base64
-      const reader = new FileReader();
-      reader.readAsDataURL(audioBlob);
+      console.log('Processing audio blob:', audioBlob.size, 'bytes, type:', audioBlob.type);
+      setIsProcessing(true);
       
-      reader.onloadend = async () => {
+      // Convert the blob to base64
+      const reader = new FileReader();
+      
+      reader.onload = async (event) => {
         try {
-          const base64Audio = reader.result as string;
-          // Remove the data URL prefix (e.g., "data:audio/webm;base64,")
-          const base64Data = base64Audio.split(',')[1];
-          
-          // Validate base64 data
-          if (!base64Data || base64Data.length < 100) {
-            console.warn('Base64 audio data is too small or invalid, skipping transcription');
-            setIsProcessing(false);
-            return;
+          if (!event.target || !event.target.result) {
+            throw new Error('Failed to read audio data');
           }
           
-          // Get authentication token
+          // Get the base64 data
+          const base64Data = (event.target.result as string).split(',')[1];
+          
+          // Prepare headers
           let headers: Record<string, string> = {
             'Content-Type': 'application/json',
           };
@@ -1556,6 +1251,9 @@ Make sure your evaluation is specific to this candidate's actual answers and the
             }
           } catch (err) {
             console.error('Error getting access token:', err);
+            handleAuthError();
+            setIsProcessing(false);
+            return;
           }
           
           // Send to speech-to-text API
@@ -1571,6 +1269,14 @@ Make sure your evaluation is specific to this candidate's actual answers and the
           if (!response.ok) {
             const errorText = await response.text();
             console.error('Speech-to-text API error:', errorText);
+            
+            // Handle authentication error
+            if (response.status === 401) {
+              handleAuthError();
+              setIsProcessing(false);
+              return;
+            }
+            
             throw new Error(`Failed to transcribe audio: ${response.status} ${response.statusText}`);
           }
           
@@ -1587,6 +1293,7 @@ Make sure your evaluation is specific to this candidate's actual answers and the
             await getAIResponse([...messages, newMessage], false, false, true);
           } else {
             setError('No speech detected. Please try again.');
+            setIsProcessing(false);
           }
         } catch (err) {
           console.error('Error in audio processing:', err);
@@ -1594,6 +1301,15 @@ Make sure your evaluation is specific to this candidate's actual answers and the
           setIsProcessing(false);
         }
       };
+      
+      reader.onerror = () => {
+        console.error('Error reading audio file');
+        setError('Failed to read audio data. Please try again.');
+        setIsProcessing(false);
+      };
+      
+      // Read the blob as data URL
+      reader.readAsDataURL(audioBlob);
     } catch (err) {
       console.error('Error setting up audio processing:', err);
       setError('Failed to process audio. Please try again.');
@@ -1609,6 +1325,28 @@ Make sure your evaluation is specific to this candidate's actual answers and the
   ) => {
     if (!interviewData) return;
     
+    // Set a processing flag to prevent multiple simultaneous calls
+    if (isProcessing) {
+      console.log("Already processing AI response, skipping duplicate call");
+      return;
+    }
+    
+    // Check time states directly from timeLeft
+    const isTimeRunningLow = timeLeft <= 120;
+    const isTimeUp = timeLeft === 0;
+    
+    // Check if time warning and time up have already been handled
+    const timeWarningHandledKey = `interview_time_warning_handled_${interviewData.id}`;
+    const timeUpHandledKey = `interview_time_up_handled_${interviewData.id}`;
+    const timeWarningHandled = localStorage.getItem(timeWarningHandledKey) === 'true';
+    const timeUpHandled = localStorage.getItem(timeUpHandledKey) === 'true';
+    
+    // Log the current state for debugging
+    console.log(`Time states before API call - Running low: ${isTimeRunningLow} (handled: ${timeWarningHandled}), Time up: ${isTimeUp} (handled: ${timeUpHandled}), timeLeft: ${timeLeft}`);
+    
+    setIsProcessing(true);
+    setError('');
+    
     // Set a timeout to reset isProcessing if the API call takes too long
     const processingTimeout = setTimeout(() => {
       console.log('API call timeout reached, resetting isProcessing');
@@ -1616,8 +1354,11 @@ Make sure your evaluation is specific to this candidate's actual answers and the
     }, 15000); // 15 seconds timeout
     
     try {
-      // Check if time is running low (less than 90 seconds)
-      const isTimeRunningLow = timeLeft < 90;
+      // Check time states again (in case they changed during async operations)
+      const isTimeVeryLow = timeLeft <= 60;
+      
+      // If time is running low or up, never include follow-up questions regardless of the parameter
+      const shouldIncludeFollowUp = includeFollowUp && !isTimeRunningLow && !isTimeUp;
       
       // Prepare headers with authentication
       let headers: Record<string, string> = {
@@ -1633,9 +1374,12 @@ Make sure your evaluation is specific to this candidate's actual answers and the
           headers['Authorization'] = `Bearer ${token}`;
         }
       } catch (err) {
-        // If getAccessToken fails, continue without authentication
+        // If getAccessToken fails, handle authentication error
         console.error('Error getting access token:', err);
-        console.log('Continuing without authentication');
+        handleAuthError();
+        clearTimeout(processingTimeout);
+        setIsProcessing(false);
+        return;
       }
       
       console.log('Making request to API with headers:', Object.keys(headers));
@@ -1647,22 +1391,20 @@ Make sure your evaluation is specific to this candidate's actual answers and the
           headers: token ? { 'Authorization': `Bearer ${token}` } : {},
         });
         
-        console.log('Auth check response status:', authCheckResponse.status);
-        
-        if (authCheckResponse.status === 401) {
-          console.warn('User is not authenticated. Redirecting to login page...');
-          // Redirect to login page
-          router.push('/auth/login');
+        if (!authCheckResponse.ok && authCheckResponse.status === 401) {
+          console.error('Authentication check failed');
+          handleAuthError();
           clearTimeout(processingTimeout);
           setIsProcessing(false);
           return;
         }
       } catch (err) {
         console.error('Error checking authentication:', err);
-        // Continue anyway, the main request will fail if auth is required
+        // Continue anyway, the main request will handle auth errors
       }
       
-      const response = await fetch(`${API_BASE_URL}/api/interview/conversation`, {
+      // Make the API request to get the AI response
+      const aiResponse = await fetch(`${API_BASE_URL}/api/interview/conversation`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -1670,25 +1412,33 @@ Make sure your evaluation is specific to this candidate's actual answers and the
           job_description: interviewData.jobDescription,
           conversation_history: conversationHistory,
           current_question_index: currentQuestionIndex,
-          time_up: timeLeft === 0,
-          time_running_low: isTimeRunningLow,
+          // IMPORTANT: For time-related flags, we need to check if they've been handled
+          // We only want to set these flags if they haven't been handled yet
+          time_up: isTimeUp && !timeUpHandled,
+          time_running_low: isTimeRunningLow && !timeWarningHandled,
           no_response_detected: isEmptyResponse,
           is_code_submission: isCodeSubmission,
           question_type: interviewData.questions[currentQuestionIndex]?.type || 'general',
-          include_follow_up: includeFollowUp
+          include_follow_up: shouldIncludeFollowUp
         }),
       });
       
-      clearTimeout(processingTimeout);
-      
-      if (!response.ok) {
-        console.error('API error:', response.status, response.statusText);
-        const errorText = await response.text();
-        console.error('API error details:', errorText);
-        throw new Error(`Failed to get AI response: ${response.status} ${response.statusText}`);
+      if (!aiResponse.ok) {
+        // Handle authentication error
+        if (aiResponse.status === 401) {
+          console.error('Authentication error in conversation API');
+          handleAuthError();
+          clearTimeout(processingTimeout);
+          setIsProcessing(false);
+          return;
+        }
+        
+        throw new Error(`Failed to get AI response: ${aiResponse.status} ${aiResponse.statusText}`);
       }
       
-      const data = await response.json();
+      clearTimeout(processingTimeout);
+      
+      const data = await aiResponse.json();
       console.log('AI response data:', data);
       
       if (!data || !data.response) {
@@ -1820,7 +1570,6 @@ Make sure your evaluation is specific to this candidate's actual answers and the
         return Promise.resolve();
       }
       
-      // Set speaking state immediately to provide visual feedback
       setIsSpeaking(true);
       
       // Get the access token
@@ -1830,7 +1579,10 @@ Make sure your evaluation is specific to this candidate's actual answers and the
         console.log('Got access token for text-to-speech');
       } catch (err) {
         console.error('Error getting access token:', err);
-        // Continue without token
+        // Handle authentication error
+        handleAuthError();
+        setIsSpeaking(false);
+        return Promise.resolve();
       }
       
       // Safely get a substring for logging
@@ -1845,12 +1597,7 @@ Make sure your evaluation is specific to this candidate's actual answers and the
         headers['Authorization'] = `Bearer ${token}`;
       }
       
-      // Preload the audio element to reduce lag
-      if (audioRef.current) {
-        audioRef.current.preload = 'auto';
-      }
-      
-      // Use a direct fetch to get the base64 audio data
+      // Use a direct fetch to get the audio data
       const response = await fetch(`${API_BASE_URL}/api/text-to-speech`, {
         method: 'POST',
         headers,
@@ -1862,48 +1609,38 @@ Make sure your evaluation is specific to this candidate's actual answers and the
       
       if (!response.ok) {
         console.error('Text-to-speech API error:', response.status, response.statusText);
+        
+        // Handle authentication error
+        if (response.status === 401) {
+          handleAuthError();
+          setIsSpeaking(false);
+          return Promise.resolve();
+        }
+        
         throw new Error(`Failed to generate speech: ${response.status} ${response.statusText}`);
       }
       
-      // Get the response as JSON which contains the base64 audio data
+      // Get the response as JSON
       const data = await response.json();
-      console.log('Received audio data response');
       
-      if (!data || !data.audio) {
-        console.error('Received invalid audio data');
-        setIsSpeaking(false);
-        return Promise.resolve();
+      if (!data.audio) {
+        console.error('No audio data in response');
+        throw new Error('No audio data in response');
       }
       
-      // The audio data is already a data URL (data:audio/mp3;base64,...)
+      console.log('Received audio data from API');
+      
+      // The audio data is already a data URL with base64 encoded audio
       const audioUrl = data.audio;
-      console.log('Using audio URL from API response');
       
       // Use the existing audio element instead of creating a new one
       if (audioRef.current) {
-        // Set the audio source directly to the data URL
-        audioRef.current.src = audioUrl;
+        // Clean up previous audio URL if it exists
+        if (audioRef.current.src && audioRef.current.src.startsWith('blob:')) {
+          URL.revokeObjectURL(audioRef.current.src);
+        }
         
-        // Preload the audio to reduce lag
-        audioRef.current.load();
-        
-        audioRef.current.oncanplaythrough = () => {
-          console.log('Audio can play through without buffering');
-          // Play the audio once it's loaded
-          try {
-            const playPromise = audioRef.current?.play();
-            if (playPromise) {
-              playPromise.catch(err => {
-                console.error('Error playing audio:', err);
-                setIsSpeaking(false);
-              });
-            }
-          } catch (err) {
-            console.error('Error playing audio:', err);
-            setIsSpeaking(false);
-          }
-        };
-        
+        // Set up event handlers before setting the source
         audioRef.current.onplay = () => {
           console.log('Audio started playing');
           setIsSpeaking(true);
@@ -1917,41 +1654,145 @@ Make sure your evaluation is specific to this candidate's actual answers and the
         audioRef.current.onerror = (e) => {
           console.error('Audio playback error:', e);
           setIsSpeaking(false);
+          
+          // Fallback to browser's built-in speech synthesis
+          if ('speechSynthesis' in window) {
+            try {
+              const utterance = new SpeechSynthesisUtterance(text);
+              utterance.onend = () => {
+                setIsSpeaking(false);
+              };
+              window.speechSynthesis.speak(utterance);
+            } catch (err) {
+              console.error('Fallback speech synthesis failed:', err);
+              setIsSpeaking(false);
+            }
+          }
         };
-      } else {
-        console.error('Audio element not found');
-        setIsSpeaking(false);
-      }
-      
-      // Return a promise that resolves when the audio finishes playing
-      return new Promise((resolve) => {
-        if (!audioRef.current) {
-          setIsSpeaking(false);
-          resolve();
-          return;
+        
+        // Update all source elements with the new URL
+        const sourceElements = audioRef.current.getElementsByTagName('source');
+        for (let i = 0; i < sourceElements.length; i++) {
+          sourceElements[i].src = audioUrl;
         }
         
-        audioRef.current.onended = () => {
-          setIsSpeaking(false);
-          resolve();
-        };
+        // Set the source after setting up event handlers
+        audioRef.current.src = audioUrl;
         
-        audioRef.current.onerror = () => {
-          setIsSpeaking(false);
-          resolve();
-        };
+        // Load the audio (important for some browsers)
+        audioRef.current.load();
         
-        // Set a timeout to prevent hanging
-        setTimeout(() => {
-          if (isSpeaking) {
+        // Play the audio
+        try {
+          console.log('Attempting to play audio');
+          const playPromise = audioRef.current.play();
+          
+          if (playPromise !== undefined) {
+            playPromise
+              .then(() => {
+                console.log('Audio playback started successfully');
+              })
+              .catch(err => {
+                console.error('Error playing audio:', err);
+                
+                // Fallback to browser's built-in speech synthesis
+                if ('speechSynthesis' in window) {
+                  try {
+                    const utterance = new SpeechSynthesisUtterance(text);
+                    utterance.onend = () => {
+                      setIsSpeaking(false);
+                    };
+                    window.speechSynthesis.speak(utterance);
+                  } catch (err) {
+                    console.error('Fallback speech synthesis failed:', err);
+                    setIsSpeaking(false);
+                  }
+                }
+              });
+          }
+        } catch (err) {
+          console.error('Error playing audio:', err);
+          setIsSpeaking(false);
+          
+          // Fallback to browser's built-in speech synthesis
+          if ('speechSynthesis' in window) {
+            try {
+              const utterance = new SpeechSynthesisUtterance(text);
+              utterance.onend = () => {
+                setIsSpeaking(false);
+              };
+              window.speechSynthesis.speak(utterance);
+            } catch (err) {
+              console.error('Fallback speech synthesis failed:', err);
+              setIsSpeaking(false);
+            }
+          }
+        }
+        
+        // Return a promise that resolves when the audio finishes playing
+        return new Promise<void>((resolve) => {
+          if (!audioRef.current) {
             setIsSpeaking(false);
             resolve();
-          }
-        }, 30000); // 30 second timeout
-      });
+        return;
+      }
+      
+          const originalOnEnded = audioRef.current.onended;
+          
+          audioRef.current.onended = (e) => {
+            // Call the original handler if it exists
+            if (originalOnEnded && typeof originalOnEnded === 'function') {
+              if (audioRef.current) {
+                originalOnEnded.call(audioRef.current, e as Event);
+              }
+            }
+            
+            setIsSpeaking(false);
+            resolve();
+          };
+          
+          const originalOnError = audioRef.current.onerror;
+          
+          audioRef.current.onerror = (e) => {
+            // Call the original handler if it exists
+            if (originalOnError && typeof originalOnError === 'function') {
+              if (audioRef.current) {
+                originalOnError.call(audioRef.current, e);
+              }
+            }
+            
+            setIsSpeaking(false);
+            resolve();
+          };
+          
+          // Set a timeout to prevent hanging
+          setTimeout(() => {
+            setIsSpeaking(false);
+            resolve();
+          }, 60000); // 1 minute timeout
+        });
+      } else {
+        console.error('Audio element reference is null');
+        setIsSpeaking(false);
+        return Promise.resolve();
+      }
     } catch (err) {
       console.error('Error in speakMessage:', err);
       setIsSpeaking(false);
+      
+      // Fallback to browser's built-in speech synthesis
+      if ('speechSynthesis' in window && text) {
+        try {
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.onend = () => {
+            setIsSpeaking(false);
+          };
+          window.speechSynthesis.speak(utterance);
+        } catch (err) {
+          console.error('Fallback speech synthesis failed:', err);
+        }
+      }
+      
       return Promise.resolve();
     }
   };
@@ -2027,61 +1868,33 @@ Make sure your evaluation is specific to this candidate's actual answers and the
   const toggleVideo = async () => {
     // If turning video on
     if (!showVideo) {
-      // First initialize WebRTC, then set the state
       try {
         console.log('Initializing WebRTC before showing video');
         
-        // Save the current recording state
-        const wasRecording = isRecording;
-        let recordingStream = null;
+        // Get user media (camera only) with specific constraints for stability
+        const mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            frameRate: { ideal: 30 }
+          },
+          audio: false // Don't request audio in video stream, keep them separate
+        });
         
-        // If recording, pause it temporarily without stopping tracks
-        if (wasRecording && mediaRecorderRef.current) {
-          try {
-            // Save the recording stream for later
-            recordingStream = mediaRecorderRef.current.stream;
-            console.log('Saved recording stream:', recordingStream.getTracks().map(t => t.kind).join(', '));
-            
-            // Just pause the recorder without stopping tracks
-            if (mediaRecorderRef.current.state === 'recording') {
-              mediaRecorderRef.current.pause();
-              console.log('Paused recording temporarily');
-            }
-          } catch (err) {
-            console.error('Error pausing recording:', err);
-          }
+        if (localVideoRef.current) {
+          // Store the stream in a ref to maintain it across renders
+          localVideoStreamRef.current = mediaStream;
+          localVideoRef.current.srcObject = mediaStream;
+          
+          // Ensure video tracks are enabled
+          mediaStream.getVideoTracks().forEach(track => {
+            track.enabled = true;
+          });
         }
-        
-        await initializeWebRTC();
         
         // Only set showVideo to true if initialization was successful
         setShowVideo(true);
         setIsVideoConnected(true);
-        
-        // If we were recording, resume it with the new stream
-        if (wasRecording) {
-          try {
-            // Small delay to ensure everything is initialized
-            setTimeout(async () => {
-              // If we have a paused recorder, try to resume it
-              if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'paused') {
-                try {
-                  mediaRecorderRef.current.resume();
-                  console.log('Resumed recording');
-                } catch (resumeErr) {
-                  console.error('Error resuming recording:', resumeErr);
-                  // If resume fails, restart recording
-                  await startRecording();
-                }
-              } else {
-                // If recorder was stopped or not in paused state, restart it
-                await startRecording();
-              }
-            }, 500);
-          } catch (err) {
-            console.error('Error resuming recording:', err);
-          }
-        }
       } catch (err) {
         console.error('Failed to initialize WebRTC:', err);
         setError('Failed to access camera. Please check your permissions.');
@@ -2090,36 +1903,17 @@ Make sure your evaluation is specific to this candidate's actual answers and the
       // If turning video off, only stop video tracks but keep audio tracks active
       if (localVideoRef.current && localVideoRef.current.srcObject) {
         console.log('Stopping video tracks before hiding video');
-        
-        // Save the current recording state
-        const wasRecording = isRecording;
-        let recordingStream = null;
-        
-        // If recording, pause it temporarily without stopping tracks
-        if (wasRecording && mediaRecorderRef.current) {
-          try {
-            // Save the recording stream for later
-            recordingStream = mediaRecorderRef.current.stream;
-            console.log('Saved recording stream:', recordingStream.getTracks().map(t => t.kind).join(', '));
-            
-            // Just pause the recorder without stopping tracks
-            if (mediaRecorderRef.current.state === 'recording') {
-              mediaRecorderRef.current.pause();
-              console.log('Paused recording temporarily');
-            }
-          } catch (err) {
-            console.error('Error pausing recording:', err);
-          }
-        }
-        
         const stream = localVideoRef.current.srcObject as MediaStream;
         
         // Only stop video tracks, keep audio tracks for recording
-        stream.getTracks().forEach(track => {
-          if (track.kind === 'video') {
+        stream.getVideoTracks().forEach(track => {
+          // Disable the track first before stopping to prevent flickering
+          track.enabled = false;
+          // Small delay before stopping to prevent visual glitches
+          setTimeout(() => {
             track.stop();
             console.log(`Toggled off: Stopped video track: ${track.kind}, enabled: ${track.enabled}, readyState: ${track.readyState}`);
-          }
+          }, 100);
         });
         
         // Keep the audio tracks in the srcObject for recording
@@ -2132,34 +1926,9 @@ Make sure your evaluation is specific to this candidate's actual answers and the
         } else {
           localVideoRef.current.srcObject = null;
         }
-        
-        // If we were recording, resume it with the audio-only stream
-        if (wasRecording) {
-          try {
-            // Small delay to ensure everything is initialized
-            setTimeout(async () => {
-              // If we have a paused recorder, try to resume it
-              if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'paused') {
-                try {
-                  mediaRecorderRef.current.resume();
-                  console.log('Resumed recording');
-                } catch (resumeErr) {
-                  console.error('Error resuming recording:', resumeErr);
-                  // If resume fails, restart recording
-                  await startRecording();
-                }
-              } else {
-                // If recorder was stopped or not in paused state, restart it
-                await startRecording();
-              }
-            }, 500);
-          } catch (err) {
-            console.error('Error resuming recording:', err);
-          }
-        }
       }
       
-      // Set the state after handling the stream
+      // Update state
       setShowVideo(false);
       setIsVideoConnected(false);
     }
@@ -2250,8 +2019,39 @@ Make sure your evaluation is specific to this candidate's actual answers and the
     if (!response) return;
     
     // If time is running low, modify the response to avoid follow-up questions
-    if (timeLeft < 120 && !response.includes("We're running out of time")) {
-      response = response + " We're running out of time, so let's move on to the next question.";
+    // and remove any follow-up questions that might be in the response
+    if (timeLeft < 120 || timeWarningShown) {
+      // Check if the response contains a follow-up question
+      const followUpIndicators = [
+        "follow-up question",
+        "follow up question",
+        "another question",
+        "next question",
+        "let me ask you",
+        "could you also",
+        "can you elaborate",
+        "tell me more about",
+        "would you mind explaining",
+        "can you describe"
+      ];
+      
+      // If the response contains a follow-up question, truncate it
+      for (const indicator of followUpIndicators) {
+        if (response.toLowerCase().includes(indicator)) {
+          // Find the position of the indicator
+          const index = response.toLowerCase().indexOf(indicator);
+          // Truncate the response before the follow-up question
+          response = response.substring(0, index);
+          // Add a closing statement
+          response += " We're running out of time, so let's move on to the next question.";
+          break;
+        }
+      }
+      
+      // If the response doesn't already mention time running out, add it
+      if (!response.includes("We're running out of time")) {
+        response = response + " We're running out of time, so let's move on to the next question.";
+      }
     }
     
     // Add the AI response to the conversation
@@ -2263,35 +2063,88 @@ Make sure your evaluation is specific to this candidate's actual answers and the
     }
   };
 
-  // Add a cleanup function to stop all media tracks when the component unmounts
-  useEffect(() => {
-    return () => {
-      // Stop all media tracks when component unmounts
-      if (localVideoRef.current && localVideoRef.current.srcObject) {
-        const stream = localVideoRef.current.srcObject as MediaStream;
+  // Function to clean up all media
+  const cleanupMedia = () => {
+    console.log("Performing comprehensive media cleanup");
+    
+    // Stop all video tracks
+    if (localVideoRef.current && localVideoRef.current.srcObject) {
+      const stream = localVideoRef.current.srcObject as MediaStream;
+      
+      // First disable tracks before stopping them to prevent visual glitches
+      stream.getTracks().forEach(track => {
+        track.enabled = false;
+      });
+      
+      // Small delay before stopping tracks to prevent visual glitches
+      setTimeout(() => {
         stream.getTracks().forEach(track => {
           track.stop();
+          console.log(`Cleanup: Stopped track: ${track.kind}`);
         });
-        localVideoRef.current.srcObject = null;
-      }
-      
-      // Also stop any recording that might be in progress
-      if (mediaRecorderRef.current) {
-        try {
-          if (mediaRecorderRef.current.state === 'recording') {
-            mediaRecorderRef.current.stop();
-          }
-          if (mediaRecorderRef.current.stream) {
-            mediaRecorderRef.current.stream.getTracks().forEach(track => {
-              track.stop();
-            });
-          }
-        } catch (err) {
-          console.error('Error stopping MediaRecorder during cleanup:', err);
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = null;
         }
+      }, 100);
+    }
+    
+    // Also clean up the stored video stream
+    if (localVideoStreamRef.current) {
+      localVideoStreamRef.current.getTracks().forEach(track => {
+        track.enabled = false;
+        setTimeout(() => track.stop(), 100);
+      });
+      localVideoStreamRef.current = null;
+    }
+    
+    // Clean up the audio stream
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach(track => {
+        track.enabled = false;
+        setTimeout(() => track.stop(), 100);
+      });
+      audioStreamRef.current = null;
+    }
+    
+    // Stop any active recording
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch (e) {
+        console.error('Error stopping media recorder:', e);
       }
-    };
-  }, []);
+      mediaRecorderRef.current = null;
+    }
+    
+    // Clean up audio element
+    if (audioRef.current) {
+      try {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+        if (audioRef.current.src) {
+          URL.revokeObjectURL(audioRef.current.src);
+          audioRef.current.src = '';
+        }
+      } catch (e) {
+        console.error("Error cleaning up audio element:", e);
+      }
+    }
+    
+    // Stop any browser speech synthesis that might be running
+    if ('speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch (e) {
+        console.error("Error canceling speech synthesis:", e);
+      }
+    }
+    
+    // Set state variables to indicate no audio is playing
+    setIsSpeaking(false);
+    setIsProcessing(false);
+    
+    console.log("Media cleanup completed");
+  };
 
   // Add a cleanup effect when component unmounts or when navigating away
   useEffect(() => {
@@ -2301,77 +2154,121 @@ Make sure your evaluation is specific to this candidate's actual answers and the
       cleanupMedia();
     };
     
-    // Function to clean up all media
-    const cleanupMedia = () => {
-      // Stop all media tracks
-      if (localVideoRef.current && localVideoRef.current.srcObject) {
-        const stream = localVideoRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach(track => {
-          track.stop();
-          console.log(`Cleanup: Stopped track: ${track.kind}`);
-        });
-        localVideoRef.current.srcObject = null;
-      }
-      
-      // Stop any active recording
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        if (mediaRecorderRef.current.stream) {
-          mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
-        }
-        try {
-          mediaRecorderRef.current.stop();
-        } catch (e) {
-          console.error('Error stopping media recorder:', e);
-        }
-      }
-      
-      // Clear any running timers
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
-      
-      // Force cleanup of all media devices
-      try {
-        // Get all media devices and stop them
-        navigator.mediaDevices.enumerateDevices()
-          .then(devices => {
-            console.log(`Cleaning up ${devices.length} media devices`);
-            
-            // Stop any active MediaStream tracks that might still be running
-            const allTracks = document.querySelectorAll('video, audio');
-            allTracks.forEach(element => {
-              const mediaElement = element as HTMLMediaElement;
-              if (mediaElement.srcObject) {
-                const stream = mediaElement.srcObject as MediaStream;
-                if (stream) {
-                  stream.getTracks().forEach(track => {
-                    track.stop();
-                    console.log(`Global cleanup: Stopped track: ${track.kind}`);
-                  });
-                  mediaElement.srcObject = null;
-                }
-              }
-            });
-          })
-          .catch(err => {
-            console.error('Error during global media cleanup:', err);
-          });
-      } catch (err) {
-        console.error('Error during global media cleanup:', err);
-      }
-    };
-    
-    // Add event listeners
     window.addEventListener('beforeunload', handleBeforeUnload);
-    
-    // For Next.js App Router, we can use the cleanup function to detect navigation away
-    // No need to use router.events which is not available in App Router
     
     // Return cleanup function
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
       cleanupMedia();
     };
+  }, []);
+  
+  // Add a cleanup effect for Next.js route changes
+  useEffect(() => {
+    // This effect will run when the component is mounted
+    console.log('Setting up route change cleanup');
+    
+    // Function to handle route changes
+    const handleRouteChange = () => {
+      console.log('Route is changing, cleaning up media');
+      cleanupMedia();
+    };
+    
+    // For Next.js App Router, we need to use the cleanup function
+    // since there's no direct event API for route changes
+    return () => {
+      console.log('Component unmounting due to navigation, cleaning up media');
+      cleanupMedia();
+    };
+  }, []);
+
+  // Add audio element initialization effect
+  useEffect(() => {
+    // Initialize audio element
+    if (audioRef.current) {
+      // Set up audio element properties
+      audioRef.current.volume = 1.0;
+      
+      // Define event handlers
+      const handlePlay = () => {
+        console.log('Audio started playing');
+      };
+      
+      const handlePause = () => {
+        console.log('Audio paused');
+      };
+      
+      const handleEnded = () => {
+        console.log('Audio ended');
+      };
+      
+      const handleError = (e: Event) => {
+        console.error('Audio error:', e);
+      };
+      
+      // Add event listeners for debugging
+      audioRef.current.addEventListener('play', handlePlay);
+      audioRef.current.addEventListener('pause', handlePause);
+      audioRef.current.addEventListener('ended', handleEnded);
+      audioRef.current.addEventListener('error', handleError);
+      
+      // Test audio with a silent audio file to ensure browser allows audio playback
+      const testAudio = () => {
+        try {
+          // Create a short silent audio context
+          const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const oscillator = audioContext.createOscillator();
+          const gainNode = audioContext.createGain();
+          
+          // Set the gain to 0 (silent)
+          gainNode.gain.value = 0;
+          oscillator.connect(gainNode);
+          gainNode.connect(audioContext.destination);
+          
+          // Play for 100ms
+          oscillator.start(audioContext.currentTime);
+          oscillator.stop(audioContext.currentTime + 0.1);
+          
+          console.log('Audio context initialized successfully');
+        } catch (err) {
+          console.error('Error initializing audio context:', err);
+        }
+      };
+      
+      // Run the test
+      testAudio();
+      
+      // Return cleanup function to remove event listeners
+      return () => {
+        if (audioRef.current) {
+          audioRef.current.removeEventListener('play', handlePlay);
+          audioRef.current.removeEventListener('pause', handlePause);
+          audioRef.current.removeEventListener('ended', handleEnded);
+          audioRef.current.removeEventListener('error', handleError);
+        }
+      };
+    }
+  }, []);
+
+  // Add a function to handle authentication errors
+  const handleAuthError = () => {
+    // Redirect to login page
+    router.push('/auth/login?redirect=' + encodeURIComponent(`/interview/session/${params.id}`));
+  };
+
+  // Add an effect to check authentication on load
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        // Try to get the access token to check if the user is authenticated
+        await getAccessToken();
+      } catch (err) {
+        console.error('Authentication error:', err);
+        handleAuthError();
+      }
+    };
+    
+    checkAuth();
   }, []);
 
   if (!interviewData) {
@@ -2411,7 +2308,7 @@ Make sure your evaluation is specific to this candidate's actual answers and the
               <div className={`flex items-center ${isRecording ? 'text-red-400' : isSpeaking ? 'text-blue-400' : 'text-gray-400'}`}>
                 <span className={`h-3 w-3 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : isSpeaking ? 'bg-blue-500 animate-pulse' : 'bg-gray-500'} mr-1`}></span>
                 <span className="text-sm">{isRecording ? 'Recording' : isSpeaking ? 'AI Speaking' : 'Not Recording'}</span>
-            </div>
+              </div>
             )}
             <button 
               onClick={toggleVideo}
@@ -2469,37 +2366,6 @@ Make sure your evaluation is specific to this candidate's actual answers and the
                     )}
                   </div>
                 </div>
-                
-                {/* Add recording button in video mode */}
-                {isVoiceMode && (
-                  <div className="mt-4 flex justify-center">
-                    <button
-                      onClick={toggleRecording}
-                      className={`px-4 py-2 rounded-full flex items-center ${
-                        isRecording 
-                          ? 'bg-red-600 text-white hover:bg-red-700' 
-                          : 'bg-indigo-600 text-white hover:bg-indigo-700'
-                      } ${(isSpeaking || isProcessing) ? 'opacity-50' : ''}`}
-                    >
-                      {isRecording ? (
-                        <>
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
-                          </svg>
-                          Stop Recording
-                        </>
-                      ) : (
-                        <>
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                          </svg>
-                          Start Recording
-                        </>
-                      )}
-                    </button>
-                  </div>
-                )}
               </div>
             ) : (
               // Show voice conversation UI when video is off
@@ -2511,7 +2377,7 @@ Make sure your evaluation is specific to this candidate's actual answers and the
                       ? "Voice mode is active. Speak clearly to answer questions." 
                       : "Type your answers in the text area below."}
                   </p>
-              </div>
+                </div>
               
                 {/* Only show conversation transcript in voice mode */}
                 {isVoiceMode && (
@@ -2552,40 +2418,41 @@ Make sure your evaluation is specific to this candidate's actual answers and the
                       <p className="text-lg font-medium">Text Mode Interview</p>
                       <p className="mt-2">Answer the questions in the text area on the right.</p>
                       <p className="mt-1">Click "Submit Answer" when you're ready to proceed.</p>
-            </div>
+                    </div>
                   </div>
                 )}
+              </div>
+            )}
             
-                {/* Voice mode controls */}
-                {isVoiceMode && (
-                  <div className="mt-4 flex justify-center">
-              <button
-                      onClick={toggleRecording}
-                      className={`px-4 py-2 rounded-full flex items-center ${
-                        isRecording 
-                          ? 'bg-red-600 text-white hover:bg-red-700' 
-                          : 'bg-indigo-600 text-white hover:bg-indigo-700'
-                      } ${(isSpeaking || isProcessing) ? 'opacity-50' : ''}`}
-                    >
-                      {isRecording ? (
-                        <>
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
-                          </svg>
-                          Stop Recording
-                        </>
-                      ) : (
-                        <>
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                          </svg>
-                          Start Recording
-                        </>
-                      )}
-              </button>
-            </div>
-                )}
+            {/* Common voice mode controls outside both video and non-video sections */}
+            {isVoiceMode && (
+              <div className="mt-4 flex justify-center">
+                <button
+                  onClick={toggleRecording}
+                  disabled={isSpeaking || isProcessing}
+                  className={`px-4 py-2 rounded-full flex items-center ${
+                    isRecording 
+                      ? 'bg-red-600 text-white hover:bg-red-700' 
+                      : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                  } ${(isSpeaking || isProcessing) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  {isRecording ? (
+                    <>
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
+                      </svg>
+                      Stop Recording
+                    </>
+                  ) : (
+                    <>
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                      </svg>
+                      Start Recording
+                    </>
+                  )}
+                </button>
               </div>
             )}
           </div>
@@ -2774,15 +2641,15 @@ Make sure your evaluation is specific to this candidate's actual answers and the
           
           <button
             onClick={handleSubmitInterview}
-            disabled={isSubmitting || timeLeft === 0}
-            className={`px-6 py-2 rounded-md bg-indigo-600 text-white font-medium hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 ${
-              isSubmitting || timeLeft === 0 ? 'opacity-70 cursor-not-allowed' : ''
+            disabled={isSubmitting && timeLeft > 0}
+            className={`px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 flex items-center ${
+              isSubmitting ? 'opacity-75 cursor-not-allowed' : ''
             }`}
           >
             {isSubmitting 
               ? 'Submitting...' 
               : timeLeft === 0 
-                ? 'Time\'s Up - Submitting...' 
+                ? 'Time\'s Up - Submit' 
                 : 'Finish & Submit'}
           </button>
         </div>
@@ -2793,10 +2660,13 @@ Make sure your evaluation is specific to this candidate's actual answers and the
         ref={audioRef} 
         className="hidden" 
         controls={false} 
-        autoPlay={false} 
+        autoPlay={true} 
         preload="auto"
+        onEnded={handleAudioEnded}
         onError={(e) => console.error('Audio element error:', e)}
-      ></audio>
+      >
+        Your browser does not support the audio element.
+      </audio>
     </div>
   );
 }

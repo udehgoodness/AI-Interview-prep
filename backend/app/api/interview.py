@@ -147,7 +147,8 @@ async def get_interview_feedback(
             request.questions or [],
             request.answers or [],
             request.job_title or "Software Engineer",
-            model
+            model,
+            request.conversation_history
         )
         
         if not evaluation:

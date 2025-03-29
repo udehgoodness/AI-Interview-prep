@@ -32,7 +32,9 @@ from app.utils.file import extract_text_from_cv
 # Import our new modules
 from app.services.auth import get_current_active_user
 from app.services.subscription import check_user_subscription_access
-from app.api import auth as auth_routes, subscription as subscription_routes
+
+# Import API routers
+from app.api import auth, subscription, audio, conversation, interview, health
 
 # Fix the import path for database.db
 from app.database.db import execute_query
@@ -50,8 +52,12 @@ app.add_middleware(
 )
 
 # Include our new routers
-app.include_router(auth_routes.router)
-app.include_router(subscription_routes.router)
+app.include_router(auth.router)
+app.include_router(subscription.router)
+app.include_router(audio.router)
+app.include_router(conversation.router)
+app.include_router(interview.router)
+app.include_router(health.router)
 
 # Models
 class InterviewRequest(BaseModel):
@@ -75,6 +81,7 @@ class FeedbackRequest(BaseModel):
     job_title: Optional[str] = None
     questions: Optional[List[Dict[str, Any]]] = None
     interview_type: Optional[str] = None
+    conversation_history: Optional[List[Dict[str, str]]] = None
 
 class FeedbackResponse(BaseModel):
     score: int
@@ -263,12 +270,16 @@ async def get_interview_feedback(
             # Free users might use DeepSeek to save costs
             model = "deepseek"
         
+        # Check if we have conversation history (voice mode)
+        has_conversation = request.conversation_history is not None and len(request.conversation_history) > 0
+        
         # Evaluate the interview
         evaluation = await ai_service.evaluate_interview(
             request.questions or [],
             request.answers or [],
             request.job_title or "Software Engineer",
-            model
+            model,
+            request.conversation_history if has_conversation else None
         )
         
         if not evaluation:
@@ -478,19 +489,36 @@ async def health_check():
 @app.on_event("startup")
 async def startup_event():
     """
-    Initialize database on startup
+    Startup event handler
     """
+    logger.info("Starting application...")
+    
+    # Initialize database
     try:
-        # Initialize database
-        from app.database.init_db import init_database
-        init_database()
-        
-        # Update subscription plan features
-        from services.subscription_service import update_subscription_plan_features
-        update_subscription_plan_features()
-        
+        from app.database import init_database, insert_default_plans
+        result = init_database()
+        if result is not True:
+            logger.error(f"Error initializing database: {result}")
+        else:
+            logger.info("Database initialized successfully")
+            
+        # Insert default subscription plans
+        plan_result = insert_default_plans()
+        if plan_result is not True:
+            logger.error("Error inserting default subscription plans")
+        else:
+            logger.info("Default subscription plans inserted successfully")
     except Exception as e:
-        print(f"Error initializing database: {str(e)}")
+        logger.error(f"Error initializing database: {str(e)}")
+    
+    # Initialize AI services
+    try:
+        from app.services.ai_service import AIService
+        global ai_service
+        ai_service = AIService()
+        logger.info("AI service initialized")
+    except Exception as e:
+        logger.error(f"Error initializing AI service: {str(e)}")
 
 @app.post("/api/test-speech-to-text")
 async def test_speech_to_text(

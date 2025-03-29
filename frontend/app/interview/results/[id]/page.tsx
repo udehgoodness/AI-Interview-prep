@@ -26,8 +26,11 @@ export default function InterviewResults({ params }: { params: { id: string } })
   useEffect(() => {
     // Force cleanup of any media tracks that might still be running
     try {
+      console.log('Results page loaded, performing comprehensive media cleanup');
+      
       // Stop any active MediaStream tracks that might still be running
       if (navigator.mediaDevices) {
+        // First, try to stop tracks from video/audio elements
         const allTracks = document.querySelectorAll('video, audio');
         allTracks.forEach(element => {
           const mediaElement = element as HTMLMediaElement;
@@ -43,7 +46,38 @@ export default function InterviewResults({ params }: { params: { id: string } })
           }
         });
         
-        // No need to request new media streams for cleanup
+        // Then, try to enumerate devices and ensure all user media is stopped
+        navigator.mediaDevices.enumerateDevices()
+          .then(devices => {
+            console.log(`Checking ${devices.length} media devices for cleanup`);
+            
+            // For each device, try to get user media and then immediately stop it
+            // This helps clean up any lingering permissions or tracks
+            const audioConstraints = { audio: true, video: false };
+            const videoConstraints = { audio: false, video: true };
+            
+            // Try to get and immediately release audio
+            navigator.mediaDevices.getUserMedia(audioConstraints)
+              .then(stream => {
+                stream.getTracks().forEach(track => {
+                  track.stop();
+                  console.log(`Results page cleanup: Released audio track: ${track.kind}`);
+                });
+              })
+              .catch(err => console.log('No audio to clean up'));
+              
+            // Try to get and immediately release video
+            navigator.mediaDevices.getUserMedia(videoConstraints)
+              .then(stream => {
+                stream.getTracks().forEach(track => {
+                  track.stop();
+                  console.log(`Results page cleanup: Released video track: ${track.kind}`);
+                });
+              })
+              .catch(err => console.log('No video to clean up'));
+          })
+          .catch(err => console.error('Error enumerating devices for cleanup:', err));
+        
         console.log('Media cleanup completed on results page');
       }
     } catch (err) {
@@ -53,7 +87,7 @@ export default function InterviewResults({ params }: { params: { id: string } })
 
   useEffect(() => {
     // Load evaluation data from localStorage using the interview-specific key
-    const storedData = localStorage.getItem(`interviewEvaluation_${params.id}`);
+    const storedData = localStorage.getItem(`interview_evaluation_${params.id}`);
     
     if (storedData) {
       try {
@@ -78,19 +112,23 @@ export default function InterviewResults({ params }: { params: { id: string } })
                 ]),
           weaknesses: Array.isArray(parsedData.weaknesses) && parsedData.weaknesses.length > 0 
             ? parsedData.weaknesses 
-            : [
-                "Could provide more detailed examples from past experience",
-                "Some technical explanations could be more comprehensive",
-                "Consider addressing edge cases in your solutions"
-              ],
+            : (Array.isArray(parsedData.areas_for_improvement) && parsedData.areas_for_improvement.length > 0
+              ? parsedData.areas_for_improvement
+              : [
+                  "Could provide more detailed examples from past experience",
+                  "Some technical explanations could be more comprehensive",
+                  "Consider addressing edge cases in your solutions"
+                ]),
           improvement_areas: Array.isArray(parsedData.improvement_areas) && parsedData.improvement_areas.length > 0 
             ? parsedData.improvement_areas 
-            : [
-                "Practice explaining complex technical concepts with concrete examples",
-                "Develop a framework for answering behavioral questions with the STAR method",
-                "Expand knowledge in specific technical areas mentioned in the job description",
-                "Prepare more detailed examples of past projects and challenges"
-              ],
+            : (Array.isArray(parsedData.recommendations) && parsedData.recommendations.length > 0
+              ? parsedData.recommendations
+              : [
+                  "Practice explaining complex technical concepts with concrete examples",
+                  "Develop a framework for answering behavioral questions with the STAR method",
+                  "Expand knowledge in specific technical areas mentioned in the job description",
+                  "Prepare more detailed examples of past projects and challenges"
+                ]),
           questions: parsedData.questions || [],
           answers: parsedData.answers || []
         };
@@ -102,7 +140,7 @@ export default function InterviewResults({ params }: { params: { id: string } })
       }
     } else {
       // If no data found with the new key format, try the old format for backward compatibility
-      const legacyStoredData = localStorage.getItem('interviewEvaluation');
+      const legacyStoredData = localStorage.getItem(`interviewEvaluation_${params.id}`);
       
       if (legacyStoredData) {
         try {
@@ -110,7 +148,7 @@ export default function InterviewResults({ params }: { params: { id: string } })
           
           if (parsedData.interviewId === params.id) {
             // Found data in the old format, migrate it to the new format
-            localStorage.setItem(`interviewEvaluation_${params.id}`, legacyStoredData);
+            localStorage.setItem(`interview_evaluation_${params.id}`, legacyStoredData);
             
             // Ensure all required fields exist with default values if missing
             const completeData = {
@@ -131,19 +169,23 @@ export default function InterviewResults({ params }: { params: { id: string } })
                     ]),
               weaknesses: Array.isArray(parsedData.weaknesses) && parsedData.weaknesses.length > 0 
                 ? parsedData.weaknesses 
-                : [
-                    "Could provide more detailed examples from past experience",
-                    "Some technical explanations could be more comprehensive",
-                    "Consider addressing edge cases in your solutions"
-                  ],
+                : (Array.isArray(parsedData.areas_for_improvement) && parsedData.areas_for_improvement.length > 0
+                  ? parsedData.areas_for_improvement
+                  : [
+                      "Could provide more detailed examples from past experience",
+                      "Some technical explanations could be more comprehensive",
+                      "Consider addressing edge cases in your solutions"
+                    ]),
               improvement_areas: Array.isArray(parsedData.improvement_areas) && parsedData.improvement_areas.length > 0 
                 ? parsedData.improvement_areas 
-                : [
-                    "Practice explaining complex technical concepts with concrete examples",
-                    "Develop a framework for answering behavioral questions with the STAR method",
-                    "Expand knowledge in specific technical areas mentioned in the job description",
-                    "Prepare more detailed examples of past projects and challenges"
-                  ],
+                : (Array.isArray(parsedData.recommendations) && parsedData.recommendations.length > 0
+                  ? parsedData.recommendations
+                  : [
+                      "Practice explaining complex technical concepts with concrete examples",
+                      "Develop a framework for answering behavioral questions with the STAR method",
+                      "Expand knowledge in specific technical areas mentioned in the job description",
+                      "Prepare more detailed examples of past projects and challenges"
+                    ]),
               questions: parsedData.questions || [],
               answers: parsedData.answers || []
             };

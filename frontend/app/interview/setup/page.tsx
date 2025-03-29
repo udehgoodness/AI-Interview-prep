@@ -70,22 +70,46 @@ export default function InterviewSetup() {
   const [planFeatureSettings, setPlanFeatureSettings] = useState(planFeatures.Free);
   const [selectedDuration, setSelectedDuration] = useState<string>("15");
 
-  // Clear previous interview evaluation data when setting up a new interview
-  useEffect(() => {
-    // Clear the latest interview evaluation ID
-    const latestEvaluationId = localStorage.getItem('latestInterviewEvaluation');
+  // Function to clear previous interview data from localStorage
+  const clearPreviousInterviewData = () => {
+    console.log('Clearing previous interview data from localStorage');
     
-    if (latestEvaluationId) {
-      // Remove the evaluation data for the latest interview
-      localStorage.removeItem(`interviewEvaluation_${latestEvaluationId}`);
-      localStorage.removeItem('latestInterviewEvaluation');
+    // Get all keys from localStorage
+    const keysToRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && (
+        key.startsWith('interview_') || 
+        key.startsWith('interviewEvaluation_') ||
+        key.startsWith('time_warning_shown_') ||
+        key.startsWith('time_up_shown_') ||
+        key.startsWith('final_message_spoken_') ||
+        key.startsWith('timeUpShown_')
+      )) {
+        keysToRemove.push(key);
+      }
     }
     
-    // For backward compatibility, also remove the old format
-    localStorage.removeItem('interviewEvaluation');
+    // Remove all identified keys
+    keysToRemove.forEach(key => {
+      console.log(`Removing localStorage key: ${key}`);
+      localStorage.removeItem(key);
+    });
     
-    console.log('Cleared previous interview evaluation data');
-  }, []);
+    // Also clear the latest evaluation ID
+    localStorage.removeItem('latestInterviewEvaluation');
+    localStorage.removeItem('interviewEvaluation');
+  };
+
+  useEffect(() => {
+    // Clear any previous interview data when the setup page loads
+    clearPreviousInterviewData();
+    
+    // Check if user is authenticated
+    if (!isAuthenticated && !isLoading) {
+      router.push('/auth/login?redirect=/interview/setup');
+    }
+  }, [isAuthenticated, isLoading, router]);
 
   // Check authentication status and get user's plan
   useEffect(() => {
@@ -161,18 +185,7 @@ export default function InterviewSetup() {
 
     try {
       // Clear any previous interview data
-      localStorage.removeItem('interviewEvaluation');
-      localStorage.removeItem('currentInterview');
-      
-      // Clear any other interview-related data that might be stored
-      const keysToRemove = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && (key.includes('interview') || key.includes('answer'))) {
-          keysToRemove.push(key);
-        }
-      }
-      keysToRemove.forEach(key => localStorage.removeItem(key));
+      clearPreviousInterviewData();
       
       // Validate inputs
       if (!jobTitle.trim()) {
@@ -182,69 +195,74 @@ export default function InterviewSetup() {
         throw new Error('Job description is required');
       }
 
-      // Upload CV if provided
-      let cvText = null;
+      // Get authentication token - use direct localStorage access to prevent blocking
+      const token = localStorage.getItem('token');
+      
+      if (!token) {
+        setError('Authentication required. Please log in again.');
+        setIsSubmitting(false);
+        setProgressiveLoading(false);
+        
+        // Redirect to login page
+        router.push('/auth/login?redirect=/interview/setup');
+        return;
+      }
+
+      // Prepare the request data
+      const requestData: {
+        job_title: string;
+        job_description: string;
+        interview_type: string;
+        duration: number;
+        use_voice_mode: boolean;
+        use_video_mode: boolean;
+        cv_text?: string;
+      } = {
+        job_title: jobTitle,
+        job_description: jobDescription,
+        interview_type: interviewType,
+        duration: duration,
+        use_voice_mode: useVoiceMode,
+        use_video_mode: useVideoMode
+      };
+
+      // If CV file is provided, upload it first
       if (cvFile) {
         const formData = new FormData();
         formData.append('file', cvFile);
-        
-        const token = await getAccessToken();
-        const uploadResponse = await Promise.race([
-          fetch(`${API_BASE_URL}/api/upload-cv`, {
-            method: 'POST',
+
+        const uploadResponse = await axios.post(
+          `${API_BASE_URL}/api/upload-cv`,
+          formData,
+          {
             headers: {
-              Authorization: `Bearer ${token}`
-            },
-            body: formData,
-          }),
-          timeoutPromise
-        ]) as Response;
-        
-        if (!uploadResponse.ok) {
-          const errorData = await uploadResponse.json().catch(() => ({ detail: 'Failed to upload CV' }));
-          throw new Error(errorData.detail || 'Failed to upload CV');
-        }
-        
-        const cvUploadResponse = await uploadResponse.json();
-        cvText = cvUploadResponse.cv_text;
+              'Content-Type': 'multipart/form-data',
+              'Authorization': `Bearer ${token}`
+            }
+          }
+        );
+
+        // Add the CV text to the request data
+        requestData.cv_text = uploadResponse.data.text;
       }
 
-      // Generate interview with progressive loading
-      setProgressiveQuestions([]);
-      setProgressiveLoading(true);
-      setProgressPercent(0);
-
-      // Make the actual request to generate all questions
-      const token = await getAccessToken();
-      console.log('Sending interview request with duration:', duration);
-      console.log('Voice mode:', useVoiceMode, 'Video mode:', useVideoMode);
-      
+      // Create a race between the API call and the timeout
       const interviewResponse = await Promise.race([
-        fetch(`${API_BASE_URL}/api/interview/questions`, {
-          method: 'POST',
+        axios.post(`${API_BASE_URL}/api/interview/questions`, requestData, {
           headers: {
-            'Content-Type': 'application/json',
             'Authorization': `Bearer ${token}`
           },
-          body: JSON.stringify({
-            job_title: jobTitle,
-            job_description: jobDescription,
-            cv_text: cvText,
-            interview_type: interviewType,
-            duration: parseInt(selectedDuration, 10), // Use selectedDuration to ensure correct value
-            use_voice_mode: useVoiceMode,
-            use_video_mode: useVideoMode
-          }),
+          onUploadProgress: (progressEvent) => {
+            if (progressEvent.total) {
+              const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+              setProgressPercent(percentCompleted);
+            }
+          }
         }),
         timeoutPromise
-      ]) as Response;
+      ]) as any; // Type assertion to avoid TypeScript errors
 
-      if (!interviewResponse.ok) {
-        const errorData = await interviewResponse.json().catch(() => ({ detail: 'Failed to generate interview' }));
-        throw new Error(errorData.detail || 'Failed to generate interview');
-      }
-
-      const interviewData = await interviewResponse.json();
+      const interviewData = interviewResponse.data;
       console.log('Interview data received:', interviewData.interview_id);
       
       // Update progress to 100%
@@ -269,7 +287,24 @@ export default function InterviewSetup() {
       router.push(`/interview/session/${interviewData.interview_id}`);
     } catch (err) {
       console.error('Error during interview setup:', err);
-      setError(err instanceof Error ? err.message : 'An unexpected error occurred');
+      
+      // Handle different types of errors
+      if (axios.isAxiosError(err) && err.response?.status === 401) {
+        setError('Authentication failed. Please log in again.');
+        
+        // Clear any invalid tokens
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        
+        // Redirect to login page after a short delay
+        setTimeout(() => {
+          router.push('/auth/login?redirect=/interview/setup');
+        }, 2000);
+      } else if (axios.isAxiosError(err) && err.response?.data?.message) {
+        setError(err.response.data.message);
+      } else {
+        setError(err instanceof Error ? err.message : 'An unexpected error occurred');
+      }
     } finally {
       setIsSubmitting(false);
       setProgressiveLoading(false);

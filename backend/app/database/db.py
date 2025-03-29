@@ -28,6 +28,10 @@ def get_db_connection():
     Create and return a database connection
     """
     try:
+        # Log connection attempt with parameters (excluding password)
+        logger.info(f"Connecting to database: {DB_NAME} on {DB_HOST}:{DB_PORT} as {DB_USER}")
+        
+        # Create connection
         conn = psycopg2.connect(
             host=DB_HOST,
             port=DB_PORT,
@@ -36,10 +40,43 @@ def get_db_connection():
             password=DB_PASSWORD,
             cursor_factory=RealDictCursor
         )
+        
+        # Set autocommit to False for transaction control
+        conn.autocommit = False
+        
         return conn
+    except psycopg2.OperationalError as e:
+        logger.error(f"Database connection error: {str(e)}")
+        # Check if the database doesn't exist
+        if "does not exist" in str(e):
+            try:
+                # Connect to default postgres database
+                logger.info("Attempting to connect to postgres database to create the application database")
+                conn = psycopg2.connect(
+                    host=DB_HOST,
+                    port=DB_PORT,
+                    dbname="postgres",
+                    user=DB_USER,
+                    password=DB_PASSWORD
+                )
+                conn.autocommit = True
+                
+                # Create the database
+                with conn.cursor() as cur:
+                    cur.execute(f"CREATE DATABASE {DB_NAME}")
+                
+                logger.info(f"Created database: {DB_NAME}")
+                conn.close()
+                
+                # Try connecting again
+                return get_db_connection()
+            except Exception as create_error:
+                logger.error(f"Failed to create database: {str(create_error)}")
+                return None
+        return None
     except Exception as e:
-        logger.error(f"Database connection error: {e}")
-        raise
+        logger.error(f"Unexpected database error: {str(e)}")
+        return None
 
 def execute_query(query, params=None, fetch=True):
     """

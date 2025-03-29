@@ -27,6 +27,7 @@ class FeedbackRequest(BaseModel):
     job_title: Optional[str] = None
     questions: Optional[List[Dict[str, Any]]] = None
     interview_type: Optional[str] = None
+    conversation_history: Optional[List[Dict[str, str]]] = None
 
 class FeedbackResponse(BaseModel):
     """Model for feedback response data"""

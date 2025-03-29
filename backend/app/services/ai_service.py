@@ -115,7 +115,8 @@ class AIService:
         questions: List[Dict[str, Any]],
         answers: List[Dict[str, Any]],
         job_title: str,
-        model: str = "openai"
+        model: str = "openai",
+        conversation_history: Optional[List[Dict[str, str]]] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Evaluate interview answers using OpenAI with DeepSeek fallback
@@ -123,9 +124,17 @@ class AIService:
         try:
             logger.info(f"Evaluating interview for {job_title} using {model}")
             
+            # If conversation history is provided (voice mode), pass it to the evaluation
+            has_conversation = conversation_history is not None and len(conversation_history) > 0
+            
             # If model is explicitly set to deepseek, use DeepSeek directly
             if model.lower() == "deepseek":
-                evaluation = await DeepSeekService().evaluate_interview(questions, answers, job_title)
+                evaluation = await DeepSeekService().evaluate_interview(
+                    questions, 
+                    answers, 
+                    job_title,
+                    conversation_history if has_conversation else None
+                )
                 if evaluation:
                     logger.info("Successfully evaluated interview using DeepSeek")
                     evaluation["model_used"] = "deepseek"
@@ -134,7 +143,12 @@ class AIService:
                 return None
             
             # Otherwise, try OpenAI first
-            evaluation = await OpenAIService().evaluate_interview(questions, answers, job_title)
+            evaluation = await OpenAIService().evaluate_interview(
+                questions, 
+                answers, 
+                job_title,
+                conversation_history if has_conversation else None
+            )
             if evaluation:
                 logger.info("Successfully evaluated interview using OpenAI")
                 evaluation["model_used"] = "openai"
@@ -142,7 +156,12 @@ class AIService:
             
             # If OpenAI fails, fall back to DeepSeek
             logger.warning("OpenAI failed to evaluate interview, falling back to DeepSeek")
-            evaluation = await DeepSeekService().evaluate_interview(questions, answers, job_title)
+            evaluation = await DeepSeekService().evaluate_interview(
+                questions, 
+                answers, 
+                job_title,
+                conversation_history if has_conversation else None
+            )
             if evaluation:
                 logger.info("Successfully evaluated interview using DeepSeek fallback")
                 evaluation["model_used"] = "deepseek"

@@ -199,7 +199,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     const interceptor = axios.interceptors.request.use(async (config) => {
       if (isAuthenticated) {
         try {
-          const token = await getAccessToken();
+          const token = localStorage.getItem('token') || '';
           if (token) {
             config.headers.Authorization = `Bearer ${token}`;
           }
@@ -220,12 +220,26 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   };
 
   const getAccessToken = async (): Promise<string> => {
-    if (isAuth0Authenticated) {
-      return await getAccessTokenSilently();
+    try {
+      if (isAuth0Authenticated) {
+        return await getAccessTokenSilently();
+      }
+      
+      // Fallback to traditional token
+      const token = localStorage.getItem('token');
+      
+      if (!token) {
+        console.error('No authentication token found');
+        return '';
+      }
+      
+      // Return the token without validation to prevent blocking UI interactions
+      // We'll handle invalid tokens when API calls fail
+      return token;
+    } catch (error) {
+      console.error('Error in getAccessToken:', error);
+      return '';
     }
-    
-    // Fallback to traditional token
-    return localStorage.getItem('token') || '';
   };
 
   const handleLogout = () => {
